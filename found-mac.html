@@ -509,38 +509,24 @@
 
   async function sendNotification(lat, lng) {
     try {
-      let message = 'Someone scanned Mac\'s collar tag!';
+      let message = 'Mac was found! Someone scanned his collar tag.';
       const now = new Date();
-      let clickUrl = '';
 
       if (lat && lng) {
         const mapsLink = `https://maps.google.com/?q=${lat},${lng}`;
-        message += `\nLocation: ${lat.toFixed(5)}, ${lng.toFixed(5)}\nTime: ${now.toLocaleString()}`;
-        clickUrl = mapsLink;
+        message += '\nLocation: ' + lat.toFixed(5) + ', ' + lng.toFixed(5);
+        message += '\nMap: ' + mapsLink;
       } else {
-        message += `\nLocation unavailable (permission denied)\nTime: ${now.toLocaleString()}`;
+        message += '\nLocation: unavailable (permission denied)';
       }
+      message += '\nTime: ' + now.toLocaleString();
 
-      const payload = {
-        topic: NTFY_TOPIC,
-        title: 'Mac was found!',
-        message: message,
-        priority: 4,
-        tags: ['dog']
-      };
-
-      if (clickUrl) {
-        payload.click = clickUrl;
-        payload.actions = [{ action: 'view', label: 'Open Map', url: clickUrl }];
-      }
-
-      const resp = await fetch('https://ntfy.sh', {
+      const resp = await fetch('https://ntfy.sh/' + NTFY_TOPIC, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: message
       });
 
-      if (!resp.ok) throw new Error('ntfy response ' + resp.status);
+      if (!resp.ok) throw new Error('Status ' + resp.status);
 
       showNotifBanner('sent', '✅', 'Mac\'s owner has been notified of your location!');
     } catch (e) {
