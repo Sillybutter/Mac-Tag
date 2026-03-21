@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>You Found Mac! 🐾</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;0,9..144,800;1,9..144,400&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --cream: #FFF8F0;
+    --warm-white: #FFFDFB;
+    --bark: #3D2B1F;
+    --bark-light: #5C4033;
+    --amber: #E8A317;
+    --amber-soft: #F5CE6E;
+    --sage: #7A9E7E;
+    --sage-light: #B5D3B8;
+    --coral: #E07A5F;
+    --coral-soft: #F2A68D;
+    --text: #2C1810;
+    --text-muted: #6B5344;
+    --shadow: rgba(61, 43, 31, 0.12);
+  }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--cream);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Paw print background pattern */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: 
+      radial-gradient(ellipse 8px 10px at 50% 50%, rgba(61,43,31,0.03) 50%, transparent 50%),
+      radial-gradient(circle 4px at 35% 30%, rgba(61,43,31,0.025) 50%, transparent 50%),
+      radial-gradient(circle 4px at 65% 30%, rgba(61,43,31,0.025) 50%, transparent 50%),
+      radial-gradient(circle 3.5px at 25% 15%, rgba(61,43,31,0.025) 50%, transparent 50%),
+      radial-gradient(circle 3.5px at 75% 15%, rgba(61,43,31,0.025) 50%, transparent 50%);
+    background-size: 80px 100px;
+    background-position: 0 0;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    position: relative;
+    z-index: 1;
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 24px 20px 48px;
+  }
+
+  /* Hero Banner */
+  .hero {
+    text-align: center;
+    margin-bottom: 28px;
+    animation: fadeUp 0.8s ease-out;
+  }
+
+  .hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--sage);
+    color: white;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 8px 20px;
+    border-radius: 40px;
+    margin-bottom: 20px;
+  }
+
+  .hero h1 {
+    font-family: 'Fraunces', serif;
+    font-weight: 800;
+    font-size: 42px;
+    line-height: 1.05;
+    color: var(--bark);
+    margin-bottom: 8px;
+  }
+
+  .hero h1 span {
+    color: var(--coral);
+  }
+
+  .hero p {
+    font-size: 16px;
+    color: var(--text-muted);
+    max-width: 320px;
+    margin: 0 auto;
+    line-height: 1.5;
+  }
+
+  /* Photo Card */
+  .photo-card {
+    position: relative;
+    border-radius: 24px;
+    overflow: hidden;
+    margin-bottom: 24px;
+    box-shadow: 0 8px 32px var(--shadow), 0 2px 8px var(--shadow);
+    animation: fadeUp 0.8s ease-out 0.1s both;
+  }
+
+  .photo-card img {
+    width: 100%;
+    height: 340px;
+    object-fit: cover;
+    object-position: center 20%;
+    display: block;
+  }
+
+  .photo-card .overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 48px 24px 20px;
+    background: linear-gradient(to top, rgba(44,24,16,0.85) 0%, transparent 100%);
+  }
+
+  .photo-card .dog-name {
+    font-family: 'Fraunces', serif;
+    font-size: 28px;
+    font-weight: 600;
+    color: white;
+  }
+
+  .photo-card .dog-breed {
+    font-size: 14px;
+    color: rgba(255,255,255,0.75);
+    margin-top: 2px;
+  }
+
+  /* Info Cards */
+  .card {
+    background: var(--warm-white);
+    border-radius: 20px;
+    padding: 24px;
+    margin-bottom: 16px;
+    box-shadow: 0 2px 12px var(--shadow);
+    border: 1px solid rgba(61,43,31,0.06);
+  }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .card-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    flex-shrink: 0;
+  }
+
+  .card-icon.amber { background: rgba(232,163,23,0.12); }
+  .card-icon.sage { background: rgba(122,158,126,0.12); }
+  .card-icon.coral { background: rgba(224,122,95,0.12); }
+
+  .card-title {
+    font-family: 'Fraunces', serif;
+    font-weight: 600;
+    font-size: 18px;
+    color: var(--bark);
+  }
+
+  .card-subtitle {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 1px;
+  }
+
+  /* Contact Details */
+  .contact-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 0;
+    border-bottom: 1px solid rgba(61,43,31,0.06);
+  }
+
+  .contact-row:last-child { border-bottom: none; }
+
+  .contact-row .label {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    min-width: 70px;
+  }
+
+  .contact-row .value {
+    font-size: 15px;
+    color: var(--bark);
+    font-weight: 500;
+  }
+
+  /* Location / Map */
+  .map-container {
+    width: 100%;
+    height: 200px;
+    border-radius: 14px;
+    overflow: hidden;
+    background: #e8e0d8;
+    margin-top: 12px;
+    position: relative;
+  }
+
+  .map-container iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+  }
+
+  .location-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 18px;
+    border-radius: 12px;
+    font-size: 14px;
+    margin-top: 12px;
+  }
+
+  .location-status.pending {
+    background: rgba(232,163,23,0.1);
+    color: var(--bark-light);
+  }
+
+  .location-status.success {
+    background: rgba(122,158,126,0.1);
+    color: #3d6b41;
+  }
+
+  .location-status.error {
+    background: rgba(224,122,95,0.1);
+    color: #9b4332;
+  }
+
+  .spinner {
+    width: 18px;
+    height: 18px;
+    border: 2.5px solid rgba(232,163,23,0.3);
+    border-top-color: var(--amber);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  /* Action Buttons */
+  .actions {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 8px;
+  }
+
+  .btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 16px 24px;
+    border-radius: 16px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 16px;
+    font-weight: 600;
+    text-decoration: none;
+    cursor: pointer;
+    border: none;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .btn:active {
+    transform: scale(0.97);
+  }
+
+  .btn-primary {
+    background: var(--sage);
+    color: white;
+    box-shadow: 0 4px 16px rgba(122,158,126,0.35);
+  }
+
+  .btn-secondary {
+    background: var(--warm-white);
+    color: var(--bark);
+    border: 2px solid rgba(61,43,31,0.1);
+    box-shadow: 0 2px 8px var(--shadow);
+  }
+
+  .btn-coral {
+    background: var(--coral);
+    color: white;
+    box-shadow: 0 4px 16px rgba(224,122,95,0.35);
+  }
+
+  .btn-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+
+  /* Notification banner */
+  .notif-banner {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 18px;
+    border-radius: 14px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    font-weight: 500;
+    animation: fadeUp 0.5s ease-out;
+  }
+
+  .notif-banner.sent {
+    display: flex;
+    background: rgba(122,158,126,0.12);
+    color: #3d6b41;
+    border: 1px solid rgba(122,158,126,0.2);
+  }
+
+  .notif-banner.failed {
+    display: flex;
+    background: rgba(224,122,95,0.12);
+    color: #9b4332;
+    border: 1px solid rgba(224,122,95,0.2);
+  }
+
+  /* Footer */
+  .footer {
+    text-align: center;
+    padding-top: 24px;
+    font-size: 12px;
+    color: var(--text-muted);
+    opacity: 0.6;
+  }
+
+  /* Animations */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .anim-1 { animation: fadeUp 0.7s ease-out 0.15s both; }
+  .anim-2 { animation: fadeUp 0.7s ease-out 0.25s both; }
+  .anim-3 { animation: fadeUp 0.7s ease-out 0.35s both; }
+  .anim-4 { animation: fadeUp 0.7s ease-out 0.45s both; }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <!-- Hero -->
+  <div class="hero">
+    <div class="hero-badge">🐾 Found a Pup!</div>
+    <h1>Hi, I'm <span>Mac!</span></h1>
+    <p>Thanks for finding me! My dad is probably worried — please help me get home.</p>
+  </div>
+
+  <!-- Photo -->
+  <div class="photo-card">
+    <img src="https://static.wixstatic.com/media/20fad3_c1f10e3408794ccaba0f2f9d81950262~mv2.jpg" alt="Mac the French Bulldog" />
+    <div class="overlay">
+      <div class="dog-name">Mac 🐶</div>
+      <div class="dog-breed">French Bulldog</div>
+    </div>
+  </div>
+
+  <!-- Notification Status -->
+  <div class="notif-banner" id="notifBanner">
+    <span id="notifIcon"></span>
+    <span id="notifText"></span>
+  </div>
+
+  <!-- Contact Card -->
+  <div class="card anim-1">
+    <div class="card-header">
+      <div class="card-icon amber">📋</div>
+      <div>
+        <div class="card-title">Mac's Info</div>
+        <div class="card-subtitle">Contact his owner, Justin</div>
+      </div>
+    </div>
+    <div class="contact-row">
+      <span class="label">Phone</span>
+      <span class="value"><a href="tel:+17346744476" style="color:var(--bark);text-decoration:none;">734-674-4476</a></span>
+    </div>
+    <div class="contact-row">
+      <span class="label">Home</span>
+      <span class="value">22674 Nona, Dearborn MI 48124</span>
+    </div>
+    <div class="actions" style="margin-top:16px;">
+      <div class="btn-row">
+        <a href="tel:+17346744476" class="btn btn-primary">📞 Call</a>
+        <a href="sms:+17346744476" class="btn btn-coral" id="textBtn">💬 Text</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Location Card -->
+  <div class="card anim-2">
+    <div class="card-header">
+      <div class="card-icon sage">📍</div>
+      <div>
+        <div class="card-title">Found Location</div>
+        <div class="card-subtitle">Sharing with Mac's owner</div>
+      </div>
+    </div>
+    <div class="location-status pending" id="locStatus">
+      <div class="spinner"></div>
+      <span>Getting your location…</span>
+    </div>
+    <div class="map-container" id="mapContainer" style="display:none;"></div>
+  </div>
+
+  <!-- Directions Home Card -->
+  <div class="card anim-3">
+    <div class="card-header">
+      <div class="card-icon coral">🏠</div>
+      <div>
+        <div class="card-title">Take Mac Home</div>
+        <div class="card-subtitle">Get directions to his house</div>
+      </div>
+    </div>
+    <div class="actions">
+      <a href="https://www.google.com/maps/dir/?api=1&destination=22674+Nona+St,+Dearborn+MI+48124" target="_blank" class="btn btn-secondary">
+        🗺️ Directions to Mac's Home
+      </a>
+    </div>
+  </div>
+
+  <div class="footer">Made with ❤️ to keep Mac safe</div>
+</div>
+
+<script>
+  const NTFY_TOPIC = 'mac-found-db811e4b';
+  const OWNER_PHONE = '+17346744476';
+
+  let foundLat = null;
+  let foundLng = null;
+
+  // Get location and notify owner
+  async function init() {
+    if (!navigator.geolocation) {
+      updateLocStatus('error', '⚠️', 'Geolocation not supported by this browser.');
+      sendNotification(null, null);
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        foundLat = pos.coords.latitude;
+        foundLng = pos.coords.longitude;
+
+        updateLocStatus('success', '✅', `Location found!`);
+        showMap(foundLat, foundLng);
+        updateTextButton(foundLat, foundLng);
+        await sendNotification(foundLat, foundLng);
+      },
+      (err) => {
+        let msg = 'Could not get location.';
+        if (err.code === 1) msg = 'Location access denied. You can still call or text Justin!';
+        updateLocStatus('error', '⚠️', msg);
+        sendNotification(null, null);
+      },
+      { enableHighAccuracy: true, timeout: 15000 }
+    );
+  }
+
+  function updateLocStatus(type, icon, text) {
+    const el = document.getElementById('locStatus');
+    el.className = 'location-status ' + type;
+    el.innerHTML = `<span>${icon}</span><span>${text}</span>`;
+  }
+
+  function showMap(lat, lng) {
+    const container = document.getElementById('mapContainer');
+    container.style.display = 'block';
+    container.innerHTML = `<iframe src="https://www.openstreetmap.org/export/embed.html?bbox=${lng-0.008},${lat-0.005},${lng+0.008},${lat+0.005}&layer=mapnik&marker=${lat},${lng}" loading="lazy"></iframe>`;
+  }
+
+  function updateTextButton(lat, lng) {
+    const mapsLink = `https://maps.google.com/?q=${lat},${lng}`;
+    const body = encodeURIComponent(`Hi! I found Mac! 🐾 Here's where I am: ${mapsLink}`);
+    document.getElementById('textBtn').href = `sms:${OWNER_PHONE}?body=${body}`;
+  }
+
+  async function sendNotification(lat, lng) {
+    try {
+      let body = '🐾 Someone scanned Mac\'s collar tag!';
+      if (lat && lng) {
+        const mapsLink = `https://maps.google.com/?q=${lat},${lng}`;
+        body += `\n📍 Location: ${lat.toFixed(5)}, ${lng.toFixed(5)}\n🗺️ ${mapsLink}`;
+      } else {
+        body += '\n📍 Location unavailable (permission denied)';
+      }
+
+      const now = new Date();
+      body += `\n🕐 ${now.toLocaleString()}`;
+
+      await fetch(`https://ntfy.sh/${NTFY_TOPIC}`, {
+        method: 'POST',
+        headers: { 'Title': '🐶 Mac was found!', 'Priority': 'high', 'Tags': 'dog' },
+        body: body
+      });
+
+      showNotifBanner('sent', '✅', 'Mac\'s owner has been notified of your location!');
+    } catch (e) {
+      showNotifBanner('failed', '⚠️', 'Auto-notify failed — please call or text Justin directly!');
+    }
+  }
+
+  function showNotifBanner(type, icon, text) {
+    const banner = document.getElementById('notifBanner');
+    banner.className = 'notif-banner ' + type;
+    document.getElementById('notifIcon').textContent = icon;
+    document.getElementById('notifText').textContent = text;
+  }
+
+  init();
+</script>
+
+</body>
+</html>
