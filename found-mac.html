@@ -509,25 +509,42 @@
 
   async function sendNotification(lat, lng) {
     try {
-      let body = '🐾 Someone scanned Mac\'s collar tag!';
+      let message = 'Someone scanned Mac\'s collar tag!';
+      const now = new Date();
+      let clickUrl = '';
+
       if (lat && lng) {
         const mapsLink = `https://maps.google.com/?q=${lat},${lng}`;
-        body += `\n📍 Location: ${lat.toFixed(5)}, ${lng.toFixed(5)}\n🗺️ ${mapsLink}`;
+        message += `\nLocation: ${lat.toFixed(5)}, ${lng.toFixed(5)}\nTime: ${now.toLocaleString()}`;
+        clickUrl = mapsLink;
       } else {
-        body += '\n📍 Location unavailable (permission denied)';
+        message += `\nLocation unavailable (permission denied)\nTime: ${now.toLocaleString()}`;
       }
 
-      const now = new Date();
-      body += `\n🕐 ${now.toLocaleString()}`;
+      const payload = {
+        topic: NTFY_TOPIC,
+        title: 'Mac was found!',
+        message: message,
+        priority: 4,
+        tags: ['dog']
+      };
 
-      await fetch(`https://ntfy.sh/${NTFY_TOPIC}`, {
+      if (clickUrl) {
+        payload.click = clickUrl;
+        payload.actions = [{ action: 'view', label: 'Open Map', url: clickUrl }];
+      }
+
+      const resp = await fetch('https://ntfy.sh', {
         method: 'POST',
-        headers: { 'Title': '🐶 Mac was found!', 'Priority': 'high', 'Tags': 'dog' },
-        body: body
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
       });
+
+      if (!resp.ok) throw new Error('ntfy response ' + resp.status);
 
       showNotifBanner('sent', '✅', 'Mac\'s owner has been notified of your location!');
     } catch (e) {
+      console.error('Notify error:', e);
       showNotifBanner('failed', '⚠️', 'Auto-notify failed — please call or text Justin directly!');
     }
   }
