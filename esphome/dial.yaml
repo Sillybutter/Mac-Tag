@@ -47,6 +47,10 @@ psram:
 
 logger:
   level: DEBUG
+  logs:
+    # Contact bounce overflows the encoder's click-event queue, which this config
+    # doesn't use (the knob interval reads the encoder count), so hide that warning.
+    rotary_encoder: ERROR
 
 api:
   reboot_timeout: 0s
@@ -304,11 +308,6 @@ globals:
     initial_value: '0'
   - id: knob_vol_ms
     type: uint32_t
-    initial_value: '0'
-
-  # Encoder clicks waiting to be handled by the 20 ms knob interval:
-  - id: knob_raw_pending
-    type: int
     initial_value: '0'
 
   - id: knob_bri_ms
@@ -609,11 +608,18 @@ sensor:
                   snprintf(buf, sizeof(buf), "%.0f\xc2\xb0", id(thermostat_target));
                   return buf;
 
-  # --- Rotary encoder: one count per detent click on this knob ---
-  # If every other click is ignored, change resolution to 2.
+  # --- Rotary encoder ---
+  # resolution 4 counts every contact change in both directions, so contact
+  # bounce cancels itself out. (At resolution 1 it doesn't: bounce piled up into
+  # jumps of 20-40 clicks the wrong way.) The 20 ms knob interval turns every
+  # 4 counts into one click.
   - platform: rotary_encoder
     id: knob
     name: "Encoder"
+    internal: true
+    resolution: 4
+    restore_mode: ALWAYS_ZERO
+    publish_initial_value: true
     pin_a:
       number: 4
       mode:
@@ -624,13 +630,6 @@ sensor:
       mode:
         input: true
         pullup: true
-    resolution: 1
-    on_clockwise:
-      then:
-        - lambda: 'id(knob_raw_pending)++;'
-    on_anticlockwise:
-      then:
-        - lambda: 'id(knob_raw_pending)--;'
 
 # ================= INTERVALS =================
 interval:
@@ -639,14 +638,36 @@ interval:
   - interval: 20ms
     then:
       - lambda: |-
+          static bool ready = false;
+          static int32_t ref = 0;          // encoder count at the last click
+          static int32_t last_count = 0;
+          static uint32_t last_move_ms = 0;
           static uint32_t woke_ms = 0;
           static bool woke = false;
           static uint32_t last_seek_ms = 0;
           static int seek_pending = 0;
           const int p = id(current_page);
           const uint32_t now = millis();
-          int raw = id(knob_raw_pending);
-          id(knob_raw_pending) = 0;
+
+          // One click is 4 encoder counts. A click registers 3 counts in, so a
+          // count or two of bounce either way can't add or reverse a click.
+          int raw = 0;
+          const float s = id(knob).state;
+          if (!isnan(s)) {
+            const int32_t count = (int32_t) s;
+            if (!ready) {
+              ref = last_count = count;
+              ready = true;
+            }
+            if (count != last_count) {
+              last_count = count;
+              last_move_ms = now;
+            }
+            while (count - ref >= 3) { raw++; ref += 4; }
+            while (ref - count >= 3) { raw--; ref -= 4; }
+            // Once the knob settles it's sitting in a detent: re-sync to it.
+            if (now - last_move_ms >= 500) ref = count;
+          }
 
           // The spin that wakes the screen shouldn't also move the menu.
           if (woke && now - woke_ms < 400) raw = 0;
