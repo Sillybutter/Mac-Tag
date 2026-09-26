@@ -306,11 +306,8 @@ globals:
     type: uint32_t
     initial_value: '0'
 
-  # Unified rotary accumulator:
+  # Encoder clicks waiting to be handled by the 20 ms knob interval:
   - id: knob_raw_pending
-    type: int
-    initial_value: '0'
-  - id: knob_subdetent
     type: int
     initial_value: '0'
 
@@ -612,7 +609,8 @@ sensor:
                   snprintf(buf, sizeof(buf), "%.0f\xc2\xb0", id(thermostat_target));
                   return buf;
 
-  # --- Rotary encoder: clean ISR listener feeding the accumulator ---
+  # --- Rotary encoder: one count per detent click on this knob ---
+  # If every other click is ignored, change resolution to 2.
   - platform: rotary_encoder
     id: knob
     name: "Encoder"
@@ -636,23 +634,42 @@ sensor:
 
 # ================= INTERVALS =================
 interval:
-  # Full-cycle input, bounded UI speed, and no stored burst after movement stops.
+  # Every click becomes exactly one step, in the direction turned. Nothing is
+  # thrown away while spinning and nothing keeps replaying after you stop.
   - interval: 20ms
     then:
       - lambda: |-
-          static uint32_t last_step_ms = 0;
+          static uint32_t woke_ms = 0;
+          static bool woke = false;
+          static uint32_t last_seek_ms = 0;
+          static int seek_pending = 0;
+          const int p = id(current_page);
+          const uint32_t now = millis();
           int raw = id(knob_raw_pending);
           id(knob_raw_pending) = 0;
-          id(knob_subdetent) = 0;
+
+          // The spin that wakes the screen shouldn't also move the menu.
+          if (woke && now - woke_ms < 400) raw = 0;
+          else woke = false;
+
+          if (p != 10) seek_pending = 0;
+          if (p == 10) {
+            // Seeking sends an ADB command, so bundle the clicks into at most
+            // one command every 150 ms (knob_step sends up to 8 key presses).
+            if ((raw > 0 && seek_pending < 0) || (raw < 0 && seek_pending > 0)) seek_pending = 0;
+            seek_pending += raw;
+            if (seek_pending == 0 || now - last_seek_ms < 150) return;
+            last_seek_ms = now;
+            raw = seek_pending;
+            seek_pending = 0;
+          }
           if (raw == 0) return;
 
-          const int p = id(current_page);
-          const bool continuous = p == 2 || p == 5 || p == 9 || p == 11 || p == 12;
-          const uint32_t gap_ms = p == 3 ? 250 : (continuous ? 80 : 140);
-          const uint32_t now = millis();
-          if (now - last_step_ms < gap_ms) return;
-          last_step_ms = now;
-          id(knob_step)->execute(raw > 0 ? 1 : -1);
+          if (p == 7) {
+            woke = true;
+            woke_ms = now;
+          }
+          id(knob_step)->execute(raw);
 
   - interval: 5s
     then:
@@ -1339,20 +1356,22 @@ script:
           }
           // ---- TV VOLUME (Page 9) ----
           else if (p == 9) {
-            if (steps > 0) {
-              id(tv_vol_up_fire)->execute();
-            } else if (steps < 0) {
-              id(tv_vol_down_fire)->execute();
-            }
+            // One IR press per click, spaced out by tv_vol_pump so none get
+            // dropped. Turning back cancels presses still waiting to be sent.
+            int q = id(tv_vol_steps);
+            if ((steps > 0 && q < 0) || (steps < 0 && q > 0)) q = 0;
+            q += steps;
+            if (q > 10) q = 10;
+            if (q < -10) q = -10;
+            id(tv_vol_steps) = q;
+            if (!id(tv_vol_pump)->is_running()) id(tv_vol_pump)->execute();
           }
           // ---- TV SEEK / FAST FORWARD (Page 10) ----
           else if (p == 10) {
-            uint32_t now = millis();
-            uint32_t delta = now - id(tv_seek_last_ms);
-            id(tv_seek_last_ms) = now;
-            if (delta > 350) id(tv_seek_multiplier) = 1;
-            else if (delta < 50) { int m = id(tv_seek_multiplier) + 2; id(tv_seek_multiplier) = m > 8 ? 8 : m; }
-            else if (delta < 120) { int m = id(tv_seek_multiplier) + 1; id(tv_seek_multiplier) = m > 4 ? 4 : m; }
+            // steps is every click from the last 150 ms, so spinning faster
+            // seeks further: one key press per click, up to 8 per command.
+            int n = steps < 0 ? -steps : steps;
+            id(tv_seek_multiplier) = n > 8 ? 8 : n;
 
             if (steps > 0) id(tv_seek_forward)->execute();
             else if (steps < 0) id(tv_seek_rewind)->execute();
@@ -1404,6 +1423,26 @@ script:
           service: button.press
           data: { entity_id: button.lnlinkha_4101599dceac00009aa47143435d_2 }
       - script.execute: tv_vol_hint_reset
+
+  # --- TV Volume: send queued clicks one IR press at a time ---
+  - id: tv_vol_pump
+    mode: single
+    then:
+      - while:
+          condition:
+            lambda: 'return id(tv_vol_steps) != 0 && id(current_page) == 9;'
+          then:
+            - if:
+                condition:
+                  lambda: 'return id(tv_vol_steps) > 0;'
+                then:
+                  - lambda: 'id(tv_vol_steps) -= 1;'
+                  - script.execute: tv_vol_up_fire
+                else:
+                  - lambda: 'id(tv_vol_steps) += 1;'
+                  - script.execute: tv_vol_down_fire
+            - delay: 120ms
+      - lambda: 'id(tv_vol_steps) = 0;'
 
   # --- TV Seek Triggers ---
   - id: tv_seek_forward
