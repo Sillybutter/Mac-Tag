@@ -1,0 +1,3153 @@
+# ============================================================
+#  ESPHome — Elecrow CrowPanel 2.1" Rotary Display
+#  Theme: Per-Room Color Coded / Material You Dark
+#  Menu: Music, TV, Light, Thermostat
+# ============================================================
+
+esphome:
+  name: dial
+  friendly_name: dial
+  includes:
+    - dial_playlists.h
+    - dial_chill.h
+  compile_process_limit: 1
+  platformio_options:
+    build_flags: "-DBOARD_HAS_PSRAM -g0 --param ggc-min-expand=10 --param ggc-min-heapsize=32768"
+    board_build.esp-idf.memory_type: qio_opi
+    board_build.flash_mode: dio
+  on_boot:
+    priority: 800
+    then:
+      - output.turn_on: lcd_power
+      - output.turn_on: display_reset
+      - delay: 100ms
+      - output.turn_off: display_reset
+      - delay: 100ms
+      - output.turn_on: tp_reset
+      - delay: 100ms
+      - output.turn_off: tp_reset
+      - delay: 120ms
+      - output.turn_on: tp_reset
+      - delay: 120ms
+      - script.execute: screen_idle_timer
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: y
+      CONFIG_ESP32S3_DATA_CACHE_64KB: y
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: y
+      CONFIG_SPIRAM_RODATA: y
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: DEBUG
+
+api:
+  reboot_timeout: 0s
+  encryption:
+    key: !secret dial_api_key
+  on_client_connected:
+    - lvgl.page.show:
+        id: main_menu_page
+        animation: OVER_LEFT
+        time: 240ms
+    - lambda: 'id(current_page) = 0;'
+  on_client_disconnected:
+    - lvgl.page.show:
+        id: connecting_page
+        animation: FADE_IN
+        time: 240ms
+    - lambda: 'id(current_page) = -1;'
+
+ota:
+  - platform: esphome
+    password: !secret dial_ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none
+  reboot_timeout: 0s
+  ap:
+    ssid: "Dial Fallback Hotspot"
+    password: !secret dial_ap_password
+
+captive_portal:
+
+# ================= TIME SERVER =================
+time:
+  - platform: homeassistant
+    id: ha_time
+    on_time:
+      - seconds: /1
+        then:
+          - if:
+              condition:
+                lambda: 'return id(current_page) == 7;'
+              then:
+                - lvgl.label.update:
+                    id: clock_label
+                    text: !lambda |-
+                      auto time = id(ha_time).now();
+                      if (time.is_valid()) {
+                        return time.strftime("%I:%M");
+                      }
+                      return std::string("--:--");
+                - lvgl.label.update:
+                    id: clock_ampm
+                    text: !lambda |-
+                      auto time = id(ha_time).now();
+                      if (time.is_valid()) {
+                        return time.strftime("%p");
+                      }
+                      return std::string("");
+                - lvgl.label.update:
+                    id: date_label
+                    text: !lambda |-
+                      auto time = id(ha_time).now();
+                      if (time.is_valid()) {
+                        return time.strftime("%A, %B %d");
+                      }
+                      return std::string("");
+
+i2c:
+  sda: 38
+  scl: 39
+  id: bus_a
+  scan: true
+
+touchscreen:
+  - platform: cst816
+    id: my_touchscreen
+    i2c_id: bus_a
+    address: 0x15
+    update_interval: 50ms
+    skip_probe: true
+    transform:
+      swap_xy: false
+      mirror_x: false
+      mirror_y: false
+    on_touch:
+      then:
+        - lambda: 'id(last_user_touch) = millis();'
+        - if:
+            condition:
+              lambda: 'return id(current_page) == 7;'
+            then:
+              - script.execute: wake_from_clock
+            else:
+              - script.execute: screen_idle_timer
+
+pcf8574:
+  - id: pcf
+    address: 0x21
+
+output:
+  - platform: ledc
+    pin: 6
+    id: bl_pwm
+    frequency: 19531Hz
+  - platform: gpio
+    id: lcd_power
+    pin:
+      pcf8574: pcf
+      number: 3
+      mode:
+        output: true
+      inverted: false
+  - platform: gpio
+    id: tp_reset
+    pin:
+      pcf8574: pcf
+      number: 0
+      mode:
+        output: true
+  - platform: gpio
+    id: display_reset
+    pin:
+      pcf8574: pcf
+      number: 4
+      mode:
+        output: true
+      inverted: true
+
+spi:
+  clk_pin: 2
+  mosi_pin: 1
+
+# ================= DISPLAY =================
+display:
+  - platform: st7701s
+    id: rgb_panel
+    update_interval: never
+    auto_clear_enabled: false
+    spi_mode: MODE3
+    color_order: RGB
+    invert_colors: false
+    dimensions:
+      width: 480
+      height: 480
+    cs_pin: 16
+    de_pin: 40
+    hsync_pin: 15
+    vsync_pin: 7
+    pclk_pin: 41
+    data_pins:
+      red:   [46, 3, 8, 18, 17]
+      green: [14, 13, 12, 11, 10, 9]
+      blue:  [5, 45, 48, 47, 21]
+    hsync_front_porch: 20
+    hsync_pulse_width: 10
+    hsync_back_porch: 10
+    vsync_front_porch: 8
+    vsync_pulse_width: 10
+    vsync_back_porch: 10
+    pclk_inverted: true
+    pclk_frequency: 18MHz
+    init_sequence:
+      - [0x01]
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x10]
+      - [0xCC, 0x10]
+      - [0xCD, 0x08]
+      - [0xB0, 0x02, 0x13, 0x1B, 0x0D, 0x10, 0x05, 0x08, 0x07, 0x07, 0x24, 0x04, 0x11, 0x0E, 0x2C, 0x33, 0x1D]
+      - [0xB1, 0x05, 0x13, 0x1B, 0x0D, 0x11, 0x05, 0x08, 0x07, 0x07, 0x24, 0x04, 0x11, 0x0E, 0x2C, 0x33, 0x1D]
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x11]
+      - [0xB0, 0x5D]
+      - [0xB1, 0x43]
+      - [0xB2, 0x81]
+      - [0xB3, 0x80]
+      - [0xB5, 0x43]
+      - [0xB7, 0x85]
+      - [0xB8, 0x20]
+      - [0xC1, 0x78]
+      - [0xC2, 0x78]
+      - [0xD0, 0x88]
+      - [0xE0, 0x00, 0x00, 0x02]
+      - [0xE1, 0x03, 0xA0, 0x00, 0x00, 0x04, 0xA0, 0x00, 0x00, 0x00, 0x20, 0x20]
+      - [0xE2, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+      - [0xE3, 0x00, 0x00, 0x11, 0x00]
+      - [0xE4, 0x22, 0x00]
+      - [0xE5, 0x05, 0xEC, 0xA0, 0xA0, 0x07, 0xEE, 0xA0, 0xA0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+      - [0xE6, 0x00, 0x00, 0x11, 0x00]
+      - [0xE7, 0x22, 0x00]
+      - [0xE8, 0x06, 0xED, 0xA0, 0xA0, 0x08, 0xEF, 0xA0, 0xA0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+      - [0xEB, 0x00, 0x00, 0x40, 0x40, 0x00, 0x00, 0x00]
+      - [0xED, 0xFF, 0xFF, 0xFF, 0xBA, 0x0A, 0xBF, 0x45, 0xFF, 0xFF, 0x54, 0xFB, 0xA0, 0xAB, 0xFF, 0xFF, 0xFF]
+      - [0xEF, 0x10, 0x0D, 0x04, 0x08, 0x3F, 0x1F]
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x13]
+      - [0xEF, 0x08]
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x00]
+      - [0x36, 0x00]
+      - [0x3A, 0x60]
+      - [0x11]
+      - delay 100ms
+      - [0x29]
+      - delay 50ms
+
+light:
+  - platform: monochromatic
+    id: lcd_backlight
+    name: "LCD Backlight"
+    output: bl_pwm
+    default_transition_length: 0s
+    restore_mode: ALWAYS_ON
+
+# ================= GLOBALS =================
+globals:
+  - id: current_page
+    type: int
+    initial_value: '0'
+  - id: timer_count_prev
+    type: int
+    initial_value: '0'
+  - id: menu_index
+    type: int
+    initial_value: '0'
+  - id: lights_menu_index
+    type: int
+    initial_value: '0'
+  - id: spotlights_menu_index
+    type: int
+    initial_value: '0'
+  - id: tv_menu_index
+    type: int
+    initial_value: '0'
+  - id: scene_ui_index
+    type: int
+    initial_value: '0'
+  - id: volume_value
+    type: int
+    initial_value: '50'
+  - id: ha_vol_raw
+    type: int
+    initial_value: '-1'
+  - id: ha_brightness_raw
+    type: int
+    initial_value: '-1'
+  - id: ha_therm_target_raw
+    type: float
+    initial_value: '-1000.0'
+  - id: ha_vol_ms
+    type: uint32_t
+    initial_value: '0'
+  - id: ha_bri_ms
+    type: uint32_t
+    initial_value: '0'
+  - id: ha_therm_ms
+    type: uint32_t
+    initial_value: '0'
+  - id: knob_vol_ms
+    type: uint32_t
+    initial_value: '0'
+
+  # Unified rotary accumulator:
+  - id: knob_raw_pending
+    type: int
+    initial_value: '0'
+  - id: knob_subdetent
+    type: int
+    initial_value: '0'
+
+  - id: knob_bri_ms
+    type: uint32_t
+    initial_value: '0'
+  - id: knob_therm_ms
+    type: uint32_t
+    initial_value: '0'
+  - id: vol_sent_ms
+    type: uint32_t
+    initial_value: '0'
+  - id: vol_last_sent
+    type: int
+    initial_value: '-1'
+  - id: brightness_value
+    type: int
+    initial_value: '0'
+  - id: lights_on
+    type: bool
+    initial_value: 'false'
+  - id: thermostat_target
+    type: float
+    initial_value: '70.0'
+  - id: thermostat_current
+    type: float
+    initial_value: '70.0'
+  - id: knob_active
+    type: bool
+    initial_value: 'false'
+  - id: music_artist_ms
+    type: uint32_t
+    initial_value: '0'
+  - id: artist_stale
+    type: bool
+    initial_value: 'true'
+  - id: tv_vol_steps
+    type: int
+    initial_value: '0'
+  - id: tv_vol_fire
+    type: bool
+    initial_value: 'false'
+  - id: tv_seek_last_ms
+    type: uint32_t
+    initial_value: '0'
+  - id: tv_seek_multiplier
+    type: int
+    initial_value: '1'
+  - id: accent_brightness_value
+    type: int
+    initial_value: '50'
+  - id: playlist_index
+    type: int
+    initial_value: '0'
+  - id: chill_index
+    type: int
+    initial_value: '0'
+  - id: last_user_touch
+    type: uint32_t
+    initial_value: '0'
+  - id: art_retry
+    type: int
+    initial_value: '0'
+  - id: tv_art_retry
+    type: int
+    initial_value: '0'
+  - id: accent_on
+    type: bool
+    initial_value: 'false'
+  - id: long_press_fired
+    type: bool
+    initial_value: 'false'
+  - id: wake_consumed
+    type: bool
+    initial_value: 'false'
+  - id: sleep_minutes
+    type: int
+    initial_value: '0'
+  - id: sleep_active
+    type: bool
+    initial_value: 'false'
+  - id: frigate_seeded
+    type: bool
+    initial_value: 'false'
+  - id: last_alert_ms
+    type: uint32_t
+    initial_value: '0'
+
+# ================= ALBUM ART =================
+http_request:
+  id: http_req
+  verify_ssl: false
+  timeout: 10s
+
+online_image:
+  - id: album_art
+    url: "http://192.168.4.195:8123/"
+    format: JPEG
+    type: RGB565
+    resize: 480x480
+    update_interval: never
+    on_download_finished:
+      - lambda: 'id(art_retry) = 0;'
+      - lvgl.image.update:
+          id: music_art
+          src: album_art
+      - lvgl.widget.show: music_art
+    on_error:
+      - lvgl.widget.hide: music_art
+      - if:
+          condition:
+            lambda: 'return id(art_retry) < 3;'
+          then:
+            - lambda: 'id(art_retry) += 1;'
+            - script.execute: music_art_retry
+
+  - id: tv_art
+    url: "http://192.168.4.195:8123/"
+    format: PNG
+    type: RGB565
+    resize: 854x480
+    update_interval: never
+    on_download_finished:
+      - lambda: 'id(tv_art_retry) = 0;'
+      - lvgl.image.update:
+          id: tv_art_img
+          src: tv_art
+      - lvgl.widget.show: tv_art_img
+    on_error:
+      - lvgl.widget.hide: tv_art_img
+      - if:
+          condition:
+            lambda: 'return id(tv_art_retry) < 3;'
+          then:
+            - lambda: 'id(tv_art_retry) += 1;'
+            - script.execute: tv_art_retry_script
+
+  - id: yt_thumb
+    url: "https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
+    format: JPEG
+    type: RGB565
+    resize: 640x480
+    update_interval: never
+    on_download_finished:
+      - lvgl.image.update:
+          id: tv_art_img
+          src: yt_thumb
+      - lvgl.widget.show: tv_art_img
+    on_error:
+      - script.execute: tv_screencap_refresh
+
+# ================= SENSORS =================
+sensor:
+  - platform: homeassistant
+    id: ha_timer_count
+    entity_id: sensor.voice_timers_summary
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: 'return x > 0.5f && id(timer_count_prev) == 0 && id(current_page) != 16;'
+          then:
+            - lvgl.page.show:
+                id: timer_page
+                animation: FADE_IN
+                time: 200ms
+            - light.turn_on:
+                id: lcd_backlight
+                brightness: 100%
+      - if:
+          condition:
+            lambda: 'return x < 0.5f && id(current_page) == 16;'
+          then:
+            - script.execute: wake_from_clock
+      - lambda: 'id(timer_count_prev) = (int) (x + 0.5f);'
+
+  - platform: homeassistant
+    id: ha_media_volume
+    entity_id: media_player.living_room_speakers_3
+    attribute: volume_level
+    internal: true
+    on_value:
+      - lambda: |-
+          if (!isnan(x)) {
+            int incoming = int(x * 100.0f + 0.5f);
+            if (incoming < 0) incoming = 0;
+            if (incoming > 100) incoming = 100;
+
+            uint32_t now = millis();
+            id(ha_vol_raw) = incoming;
+            id(ha_vol_ms) = now;
+
+            bool music_page = id(current_page) == 2 || id(current_page) == 11;
+            bool recent_knob = id(knob_vol_ms) != 0 &&
+                               (uint32_t)(now - id(knob_vol_ms)) < 30000UL;
+            bool suppress = music_page && recent_knob;
+
+            if (!suppress) {
+              id(volume_value) = incoming;
+            }
+          }
+      - if:
+          condition:
+            lambda: |-
+              uint32_t now = millis();
+              bool music_page = id(current_page) == 2 || id(current_page) == 11;
+              bool recent_knob = id(knob_vol_ms) != 0 &&
+                                 (uint32_t)(now - id(knob_vol_ms)) < 30000UL;
+              return !(music_page && recent_knob);
+          then:
+            - lvgl.label.update:
+                id: volume_display
+                text: !lambda |-
+                  static char buf[8];
+                  snprintf(buf, sizeof(buf), "%d%%", id(volume_value));
+                  return buf;
+            - lvgl.arc.update:
+                id: volume_arc
+                value: !lambda 'return id(volume_value);'
+
+  - platform: homeassistant
+    id: ha_light_brightness
+    entity_id: light.living_room_main_lights
+    attribute: brightness
+    internal: true
+    on_value:
+      - lambda: |-
+          if (!isnan(x)) {
+            id(ha_brightness_raw) = int((x / 255.0f) * 100.0f + 0.5f);
+            id(ha_bri_ms) = millis();
+            if (!id(knob_active)) id(brightness_value) = id(ha_brightness_raw);
+          }
+      - if:
+          condition:
+            lambda: 'return !id(knob_active);'
+          then:
+            - lvgl.label.update:
+                id: brightness_value_label
+                text: !lambda |-
+                  static char buf[16];
+                  snprintf(buf, sizeof(buf), "%d%%", id(brightness_value));
+                  return buf;
+            - lvgl.arc.update:
+                id: brightness_arc
+                value: !lambda 'return id(brightness_value);'
+
+  - platform: homeassistant
+    id: ha_thermostat_current
+    entity_id: climate.living_room_thermostat
+    attribute: current_temperature
+    internal: true
+    on_value:
+      - lambda: |-
+          if (!isnan(x)) {
+            id(thermostat_current) = x;
+          }
+      - lvgl.label.update:
+          id: thermostat_current_label
+          text: !lambda |-
+            static char buf[24];
+            snprintf(buf, sizeof(buf), "Currently %.0f\xc2\xb0""F", id(thermostat_current));
+            return buf;
+      - lvgl.label.update:
+          id: main_menu_top
+          text: !lambda |-
+            static char buf[32];
+            snprintf(buf, sizeof(buf), "Home  \xc2\xb7  Inside %.0f\xc2\xb0", id(thermostat_current));
+            return buf;
+      - script.execute: update_clock_status
+
+  - platform: homeassistant
+    id: ha_weather_temp
+    entity_id: weather.forecast_home_3
+    attribute: temperature
+    internal: true
+    on_value:
+      - script.execute: update_clock_status
+
+  - platform: homeassistant
+    id: ha_thermostat_target
+    entity_id: climate.living_room_thermostat
+    attribute: temperature
+    internal: true
+    on_value:
+      - lambda: |-
+          if (!isnan(x)) {
+            id(ha_therm_target_raw) = x;
+            id(ha_therm_ms) = millis();
+            if (!id(knob_active)) id(thermostat_target) = x;
+          }
+      - if:
+          condition:
+            lambda: 'return !id(knob_active);'
+          then:
+            - lvgl.label.update:
+                id: thermostat_target_label
+                text: !lambda |-
+                  static char buf[16];
+                  snprintf(buf, sizeof(buf), "%.0f\xc2\xb0", id(thermostat_target));
+                  return buf;
+
+  # --- Rotary encoder: clean ISR listener feeding the accumulator ---
+  - platform: rotary_encoder
+    id: knob
+    name: "Encoder"
+    pin_a:
+      number: 4
+      mode:
+        input: true
+        pullup: true
+    pin_b:
+      number: 42
+      mode:
+        input: true
+        pullup: true
+    resolution: 1
+    on_clockwise:
+      then:
+        - lambda: 'id(knob_raw_pending)++;'
+    on_anticlockwise:
+      then:
+        - lambda: 'id(knob_raw_pending)--;'
+
+# ================= INTERVALS =================
+interval:
+  # Full-cycle input, bounded UI speed, and no stored burst after movement stops.
+  - interval: 20ms
+    then:
+      - lambda: |-
+          static uint32_t last_step_ms = 0;
+          int raw = id(knob_raw_pending);
+          id(knob_raw_pending) = 0;
+          id(knob_subdetent) = 0;
+          if (raw == 0) return;
+
+          const int p = id(current_page);
+          const bool continuous = p == 2 || p == 5 || p == 9 || p == 11 || p == 12;
+          const uint32_t gap_ms = p == 3 ? 250 : (continuous ? 80 : 140);
+          const uint32_t now = millis();
+          if (now - last_step_ms < gap_ms) return;
+          last_step_ms = now;
+          id(knob_step)->execute(raw > 0 ? 1 : -1);
+
+  - interval: 5s
+    then:
+      - if:
+          condition:
+            lambda: |-
+              if ((millis() - id(last_user_touch)) < 20000) return false;
+              int p = id(current_page);
+              if (p == 7 || p == 10 || p == 11 || p == 13) return false;
+              bool music = id(ha_music_state).state == "playing";
+              bool tv = id(ha_tv_state).state == "playing"
+                     && id(ha_tv_app_name).state != "Home Assistant Lovelace";
+              if (music && p == 2) return false;
+              return music || tv;
+          then:
+            - if:
+                condition:
+                  lambda: 'return id(ha_music_state).state == "playing";'
+                then:
+                  - lvgl.page.show:
+                      id: music_now_playing_page
+                      animation: OVER_BOTTOM
+                      time: 240ms
+                else:
+                  - lvgl.page.show:
+                      id: tv_now_playing_page
+                      animation: OVER_BOTTOM
+                      time: 240ms
+            - script.execute: screen_idle_timer
+
+# ================= BINARY SENSORS =================
+binary_sensor:
+  - platform: homeassistant
+    id: ha_light_state
+    entity_id: light.living_room_main_lights
+    internal: true
+    on_press:
+      - lambda: 'id(lights_on) = true;'
+    on_release:
+      - lambda: 'id(lights_on) = false;'
+
+  - platform: gpio
+    id: encoder_button
+    name: "Encoder Button"
+    pin:
+      pcf8574: pcf
+      number: 5
+      mode:
+        input: true
+      inverted: true
+    on_press:
+      - lambda: 'id(last_user_touch) = millis();'
+      - if:
+          condition:
+            lambda: 'return id(current_page) == 7;'
+          then:
+            - lambda: 'id(wake_consumed) = true;'
+            - script.execute: wake_from_clock
+          else:
+            - lambda: 'id(long_press_fired) = false;'
+            - script.execute: screen_idle_timer
+            - script.execute: encoder_hold_timer
+    on_release:
+      - script.stop: encoder_hold_timer
+      - if:
+          condition:
+            lambda: 'return id(wake_consumed) || id(long_press_fired);'
+          then:
+            - lambda: 'id(wake_consumed) = false; id(long_press_fired) = false;'
+          else:
+            # ---- MAIN MENU CLICK ----
+            - if:
+                condition:
+                  lambda: 'return id(current_page) == 0;'
+                then:
+                  - if:
+                      condition:
+                        lambda: 'return id(menu_index) == 0;'
+                      then:
+                        - lvgl.page.show: { id: music_now_playing_page, animation: OVER_LEFT, time: 240ms }
+                  - if:
+                      condition:
+                        lambda: 'return id(menu_index) == 1;'
+                      then:
+                        - lvgl.page.show: { id: tv_menu_page, animation: OVER_LEFT, time: 240ms }
+                  - if:
+                      condition:
+                        lambda: 'return id(menu_index) == 2;'
+                      then:
+                        - lvgl.page.show: { id: lights_menu_page, animation: OVER_LEFT, time: 240ms }
+                  - if:
+                      condition:
+                        lambda: 'return id(menu_index) == 3;'
+                      then:
+                        - lvgl.page.show: { id: thermostat_page, animation: OVER_LEFT, time: 240ms }
+                  - if:
+                      condition:
+                        lambda: 'return id(menu_index) == 4;'
+                      then:
+                        - lvgl.page.show: { id: chill_page, animation: OVER_LEFT, time: 240ms }
+            # ---- LIGHTS SUB-MENU CLICK ----
+            - if:
+                condition:
+                  lambda: 'return id(current_page) == 1;'
+                then:
+                  - if:
+                      condition:
+                        lambda: 'return id(lights_menu_index) == 0;'
+                      then:
+                        - lvgl.page.show: { id: brightness_page, animation: OVER_LEFT, time: 240ms }
+                  - if:
+                      condition:
+                        lambda: 'return id(lights_menu_index) == 1;'
+                      then:
+                        - lvgl.page.show: { id: accent_page, animation: OVER_LEFT, time: 240ms }
+                  - if:
+                      condition:
+                        lambda: 'return id(lights_menu_index) == 2;'
+                      then:
+                        - lvgl.page.show: { id: spotlights_page, animation: OVER_LEFT, time: 240ms }
+                        - script.execute: update_spotlights_menu_ui
+                  - if:
+                      condition:
+                        lambda: 'return id(lights_menu_index) == 3;'
+                      then:
+                        - lvgl.page.show: { id: scenes_page, animation: OVER_LEFT, time: 240ms }
+                  - if:
+                      condition:
+                        lambda: 'return id(lights_menu_index) == 4;'
+                      then:
+                        - homeassistant.service:
+                            service: switch.toggle
+                            data:
+                              entity_id: switch.ai_sync_box_strip_dream_view_toggle
+                        - script.execute: flash_lights_hint
+                  - if:
+                      condition:
+                        lambda: 'return id(lights_menu_index) == 5;'
+                      then:
+                        - homeassistant.service:
+                            service: light.turn_off
+                            data:
+                              entity_id: light.living_room_main_lights, light.living_room_art_light, light.mantel_lights_2, light.speaker_light, light.slat_wall_3, light.slat_wall_light_2, light.wall_slat_light_1, light.uplighter_floor_lamp, light.living_room_plant_ligh, light.couch_lights, light.gold_lamp
+                        - script.execute: flash_lights_hint
+                  - if:
+                      condition:
+                        lambda: 'return id(lights_menu_index) == 6;'
+                      then:
+                        - lvgl.page.show: { id: main_menu_page, animation: OVER_LEFT, time: 240ms }
+                        - lambda: 'id(current_page) = 0;'
+            # ---- SPOTLIGHTS CLICK ----
+            - if:
+                condition:
+                  lambda: 'return id(current_page) == 8;'
+                then:
+                  - script.execute: activate_spotlight
+                  - lvgl.label.update: { id: spotlights_action_label, text: "Sent!", text_color: 0x5DE6CC }
+                  - delay: 1500ms
+                  - lvgl.label.update: { id: spotlights_action_label, text: "Press to activate", text_color: 0x9E9EA4 }
+            # ---- TV SUB-MENU CLICK ----
+            - if:
+                condition:
+                  lambda: 'return id(current_page) == 6;'
+                then:
+                  - if:
+                      condition: { lambda: 'return id(tv_menu_index) == 0;' }
+                      then: [ lvgl.page.show: { id: tv_now_playing_page, animation: OVER_LEFT, time: 240ms } ]
+                  - if:
+                      condition: { lambda: 'return id(tv_menu_index) == 1;' }
+                      then: [ lvgl.page.show: { id: tv_volume_page, animation: OVER_LEFT, time: 240ms } ]
+                  - if:
+                      condition: { lambda: 'return id(tv_menu_index) == 2;' }
+                      then: [ lvgl.page.show: { id: sleep_page, animation: OVER_LEFT, time: 240ms } ]
+                  - if:
+                      condition: { lambda: 'return id(tv_menu_index) == 3;' }
+                      then:
+                        - homeassistant.service:
+                            service: automation.trigger
+                            data: { entity_id: automation.living_room_table_button_quick_press }
+                  - if:
+                      condition: { lambda: 'return id(tv_menu_index) == 4;' }
+                      then:
+                        - homeassistant.service:
+                            service: script.turn_on
+                            data: { entity_id: script.stremio_launch_app }
+                  - if:
+                      condition: { lambda: 'return id(tv_menu_index) == 5;' }
+                      then:
+                        - homeassistant.service:
+                            service: script.turn_on
+                            data: { entity_id: script.launch_youtube_tv }
+                  - if:
+                      condition: { lambda: 'return id(tv_menu_index) == 6;' }
+                      then:
+                        - homeassistant.service:
+                            service: media_player.select_source
+                            data:
+                              entity_id: media_player.android_tv_192_168_4_35
+                              source: "com.limelight"
+                  - if:
+                      condition: { lambda: 'return id(tv_menu_index) == 7;' }
+                      then:
+                        - lvgl.page.show: { id: main_menu_page, animation: OVER_LEFT, time: 240ms }
+                        - lambda: 'id(current_page) = 0;'
+            # ---- BRIGHTNESS PAGE: toggle ----
+            - if:
+                condition:
+                  lambda: 'return id(current_page) == 5;'
+                then:
+                  - lambda: 'id(lights_on) = !id(lights_on);'
+                  - if:
+                      condition:
+                        lambda: 'return id(lights_on);'
+                      then:
+                        - homeassistant.service:
+                            service: light.turn_on
+                            data:
+                              entity_id: light.living_room_main_lights
+                            data_template:
+                              brightness_pct: !lambda 'return id(brightness_value);'
+                      else:
+                        - homeassistant.service:
+                            service: light.turn_off
+                            data:
+                              entity_id: light.living_room_main_lights
+            # ---- ACCENT PAGE: toggle group ----
+            - if:
+                condition:
+                  lambda: 'return id(current_page) == 14;'
+                then:
+                  - lambda: 'id(accent_on) = !id(accent_on);'
+                  - if:
+                      condition:
+                        lambda: 'return id(accent_on);'
+                      then:
+                        - script.execute: accent_send
+                      else:
+                        - homeassistant.service:
+                            service: light.turn_off
+                            data:
+                              entity_id: light.living_room_art_light, light.mantel_lights_2, light.speaker_light, light.slat_wall_3, light.slat_wall_light_2, light.wall_slat_light_1, light.uplighter_floor_lamp, light.living_room_plant_ligh, light.couch_lights, light.gold_lamp
+            # ---- MUSIC VOLUME PAGE: back ----
+            - if:
+                condition: { lambda: 'return id(current_page) == 2;' }
+                then: [ lvgl.page.show: { id: music_now_playing_page, animation: OVER_LEFT, time: 240ms } ]
+            # ---- MUSIC NOW PLAYING: play/pause ----
+            - if:
+                condition: { lambda: 'return id(current_page) == 11;' }
+                then:
+                  - homeassistant.service:
+                      service: media_player.media_play_pause
+                      data: { entity_id: media_player.living_room_speakers_2 }
+            # ---- THERMOSTAT PAGE: back ----
+            - if:
+                condition: { lambda: 'return id(current_page) == 3;' }
+                then:
+                  - lvgl.page.show: { id: main_menu_page, animation: OVER_LEFT, time: 240ms }
+                  - lambda: 'id(current_page) = 0;'
+            # ---- SCENES PAGE: activate ----
+            - if:
+                condition: { lambda: 'return id(current_page) == 4;' }
+                then:
+                  - script.execute: activate_scene
+                  - lvgl.label.update: { id: scene_action_label, text: "Activated!", text_color: 0xF48FB1 }
+                  - delay: 1500ms
+                  - lvgl.label.update: { id: scene_action_label, text: "Press to set", text_color: 0x9E9EA4 }
+            # ---- TV VOLUME PAGE: back ----
+            - if:
+                condition: { lambda: 'return id(current_page) == 9;' }
+                then: [ lvgl.page.show: { id: tv_menu_page, animation: OVER_LEFT, time: 240ms } ]
+            # ---- TV NOW PLAYING: play/pause ----
+            - if:
+                condition: { lambda: 'return id(current_page) == 10;' }
+                then:
+                  - homeassistant.service:
+                      service: media_player.media_play_pause
+                      data: { entity_id: media_player.android_tv_192_168_4_35 }
+            # ---- SLEEP TIMER: start / cancel ----
+            - if:
+                condition: { lambda: 'return id(current_page) == 12;' }
+                then:
+                  - if:
+                      condition: { lambda: 'return id(sleep_active);' }
+                      then:
+                        - script.stop: sleep_timer_run
+                        - lambda: 'id(sleep_active) = false; id(sleep_minutes) = 0;'
+                        - script.execute: sleep_update_ui
+                        - lvgl.label.update: { id: clock_sleep_label, text: "" }
+                      else:
+                        - if:
+                            condition: { lambda: 'return id(sleep_minutes) > 0;' }
+                            then:
+                              - lambda: 'id(sleep_active) = true;'
+                              - script.execute: sleep_timer_run
+                              - script.execute: sleep_update_ui
+            # ---- PLAYLISTS: play selected ----
+            - if:
+                condition: { lambda: 'return id(current_page) == 15;' }
+                then:
+                  - homeassistant.service:
+                      service: music_assistant.play_media
+                      data:
+                        entity_id: media_player.living_room_speakers_2
+                        media_type: playlist
+                        enqueue: replace
+                      data_template:
+                        media_id: !lambda 'return std::string(DIAL_PLAYLIST_URIS[id(playlist_index)]);'
+                  - script.execute: flash_playlist_hint
+            # ---- CHILL OUT: play selected ----
+            - if:
+                condition: { lambda: 'return id(current_page) == 17;' }
+                then:
+                  - homeassistant.service:
+                      service: input_boolean.turn_on
+                      data: { entity_id: input_boolean.chill_out_active }
+                  - homeassistant.service:
+                      service: music_assistant.play_media
+                      data:
+                        entity_id: media_player.living_room_speakers_2
+                        enqueue: replace
+                      data_template:
+                        media_id: !lambda 'return std::string(DIAL_CHILL_URIS[id(chill_index)]);'
+                        media_type: !lambda 'return std::string(DIAL_CHILL_TYPES[id(chill_index)]);'
+                  - script.execute: flash_chill_hint
+            # ---- PERSON ALERT: dismiss ----
+            - if:
+                condition: { lambda: 'return id(current_page) == 13;' }
+                then:
+                  - script.stop: alert_auto_dismiss
+                  - script.execute: wake_from_clock
+
+# ================= TEXT SENSORS =================
+text_sensor:
+  - platform: homeassistant
+    id: ha_thermostat_action
+    entity_id: climate.living_room_thermostat
+    attribute: hvac_action
+    internal: true
+    on_value:
+      - lvgl.label.update:
+          id: thermostat_action_label
+          text: !lambda |-
+            static char buf[24];
+            std::string action = id(ha_thermostat_action).state;
+            if (action == "heating") snprintf(buf, sizeof(buf), "Heating");
+            else if (action == "cooling") snprintf(buf, sizeof(buf), "Cooling");
+            else if (action == "idle") snprintf(buf, sizeof(buf), "Idle");
+            else if (action == "off") snprintf(buf, sizeof(buf), "Off");
+            else snprintf(buf, sizeof(buf), "%s", action.c_str());
+            return buf;
+
+  - platform: homeassistant
+    id: ha_thermostat_mode
+    entity_id: climate.living_room_thermostat
+    internal: true
+    on_value:
+      - lvgl.label.update:
+          id: thermostat_mode_label
+          text: !lambda |-
+            static char buf[24];
+            std::string mode = id(ha_thermostat_mode).state;
+            if (mode == "heat") snprintf(buf, sizeof(buf), "Heat");
+            else if (mode == "cool") snprintf(buf, sizeof(buf), "Cool");
+            else if (mode == "heat_cool") snprintf(buf, sizeof(buf), "Auto");
+            else if (mode == "off") snprintf(buf, sizeof(buf), "Off");
+            else snprintf(buf, sizeof(buf), "%s", mode.c_str());
+            return buf;
+      - if:
+          condition:
+            lambda: 'return id(ha_thermostat_mode).state == "heat";'
+          then:
+            - lvgl.widget.update: { id: thermo_glow_1, bg_color: 0x0E0800 }
+            - lvgl.widget.update: { id: thermo_glow_2, bg_color: 0x180E00 }
+            - lvgl.widget.update: { id: thermo_glow_3, bg_color: 0x221600 }
+            - lvgl.widget.update: { id: thermo_ring, bg_color: 0x2D1B00, bg_grad_color: 0x1A1000, border_color: 0xF4A535 }
+            - lvgl.label.update: { id: thermostat_action_label, text_color: 0xF4A535 }
+      - if:
+          condition:
+            lambda: 'return id(ha_thermostat_mode).state == "cool";'
+          then:
+            - lvgl.widget.update: { id: thermo_glow_1, bg_color: 0x000810 }
+            - lvgl.widget.update: { id: thermo_glow_2, bg_color: 0x000E1A }
+            - lvgl.widget.update: { id: thermo_glow_3, bg_color: 0x001626 }
+            - lvgl.widget.update: { id: thermo_ring, bg_color: 0x001B2D, bg_grad_color: 0x00101A, border_color: 0x8AB4F8 }
+            - lvgl.label.update: { id: thermostat_action_label, text_color: 0x8AB4F8 }
+      - if:
+          condition:
+            lambda: 'return id(ha_thermostat_mode).state != "heat" && id(ha_thermostat_mode).state != "cool";'
+          then:
+            - lvgl.widget.update: { id: thermo_glow_1, bg_color: 0x060606 }
+            - lvgl.widget.update: { id: thermo_glow_2, bg_color: 0x0A0A0B }
+            - lvgl.widget.update: { id: thermo_glow_3, bg_color: 0x0F0F11 }
+            - lvgl.widget.update: { id: thermo_ring, bg_color: 0x1C1C1E, bg_grad_color: 0x121214, border_color: 0x3A3A3C }
+            - lvgl.label.update: { id: thermostat_action_label, text_color: 0x8E8E93 }
+
+  - platform: homeassistant
+    id: ha_tv_media_title
+    entity_id: media_player.living_room_tv_cast
+    attribute: media_title
+    internal: true
+    on_value:
+      - if:
+          condition: { lambda: 'return id(current_page) == 10;' }
+          then: [ lvgl.label.update: { id: tv_now_title, text: !lambda 'return id(ha_tv_media_title).state.c_str();' } ]
+
+  - platform: homeassistant
+    id: ha_tv_app_name
+    entity_id: media_player.living_room_tv_cast
+    attribute: app_name
+    internal: true
+    on_value:
+      - if:
+          condition: { lambda: 'return id(current_page) == 10;' }
+          then: [ lvgl.label.update: { id: tv_now_app, text: !lambda 'return id(ha_tv_app_name).state.c_str();' } ]
+
+  - platform: homeassistant
+    id: ha_tv_state
+    entity_id: media_player.living_room_tv_cast
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: |-
+              return id(ha_tv_state).state == "playing" && id(current_page) != 10
+                  && id(ha_music_state).state != "playing"
+                  && id(ha_tv_app_name).state != "Home Assistant Lovelace"
+                  && (millis() - id(last_user_touch)) > 20000;
+          then:
+            - lvgl.page.show: { id: tv_now_playing_page, animation: OVER_BOTTOM, time: 240ms }
+            - script.execute: screen_idle_timer
+      - if:
+          condition: { lambda: 'return id(current_page) == 10;' }
+          then:
+            - lvgl.label.update:
+                id: tv_now_state_label
+                text: !lambda |-
+                  static char buf[16];
+                  std::string s = id(ha_tv_state).state;
+                  if (s == "playing") snprintf(buf, sizeof(buf), "Playing");
+                  else if (s == "paused") snprintf(buf, sizeof(buf), "Paused");
+                  else if (s == "idle") snprintf(buf, sizeof(buf), "Idle");
+                  else if (s == "unavailable" || s == "unknown") snprintf(buf, sizeof(buf), "--");
+                  else snprintf(buf, sizeof(buf), "%s", s.c_str());
+                  return buf;
+      - if:
+          condition: { lambda: 'return id(ha_tv_state).state != "playing" && id(ha_tv_state).state != "paused";' }
+          then: [ lvgl.widget.hide: tv_art_img ]
+
+  - platform: homeassistant
+    id: ha_music_title
+    entity_id: media_player.living_room_speakers_2
+    attribute: media_title
+    internal: true
+    on_value:
+      - if:
+          condition: { lambda: 'return id(current_page) == 11;' }
+          then: [ lvgl.label.update: { id: music_now_title, text: !lambda 'return id(ha_music_title).state.c_str();' } ]
+      - script.execute: artist_stale_check
+
+  - platform: homeassistant
+    id: ha_music_artist
+    entity_id: media_player.living_room_speakers_2
+    attribute: media_artist
+    internal: true
+    on_value:
+      - lambda: |-
+          id(music_artist_ms) = millis();
+          id(artist_stale) = id(ha_music_artist).state.empty();
+      - if:
+          condition: { lambda: 'return id(current_page) == 11;' }
+          then: [ lvgl.label.update: { id: music_now_artist, text: !lambda 'return id(ha_music_artist).state.c_str();' } ]
+
+  - platform: homeassistant
+    id: ha_music_state
+    entity_id: media_player.living_room_speakers_2
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: |-
+              return id(ha_music_state).state == "playing" && id(current_page) != 11
+                  && id(current_page) != 2
+                  && (millis() - id(last_user_touch)) > 20000;
+          then:
+            - lvgl.page.show: { id: music_now_playing_page, animation: OVER_BOTTOM, time: 240ms }
+            - script.execute: screen_idle_timer
+      - if:
+          condition: { lambda: 'return id(current_page) == 11;' }
+          then:
+            - lvgl.label.update:
+                id: music_now_state_label
+                text: !lambda |-
+                  static char buf[16];
+                  std::string s = id(ha_music_state).state;
+                  if (s == "playing") snprintf(buf, sizeof(buf), "Playing");
+                  else if (s == "paused") snprintf(buf, sizeof(buf), "Paused");
+                  else if (s == "idle") snprintf(buf, sizeof(buf), "Idle");
+                  else if (s == "unavailable" || s == "unknown") snprintf(buf, sizeof(buf), "--");
+                  else snprintf(buf, sizeof(buf), "%s", s.c_str());
+                  return buf;
+      - lvgl.label.update:
+          id: music_play_icon
+          text: !lambda |-
+            if (id(ha_music_state).state == "playing") return std::string("||");
+            return std::string("▶");
+      - if:
+          condition: { lambda: 'return id(ha_music_state).state != "playing" && id(ha_music_state).state != "paused";' }
+          then: [ lvgl.widget.hide: music_art ]
+
+  - platform: homeassistant
+    id: ha_music_picture
+    entity_id: media_player.living_room_speakers_2
+    attribute: entity_picture
+    internal: true
+    on_value:
+      - if:
+          condition: { lambda: 'return x.size() > 4;' }
+          then:
+            - lambda: |-
+                std::string url = x;
+                if (url.rfind("http", 0) != 0) url = std::string("http://192.168.4.195:8123") + url;
+                id(art_retry) = 0;
+                id(album_art).set_url(url);
+            - component.update: album_art
+          else:
+            - lvgl.widget.hide: music_art
+
+  - platform: homeassistant
+    id: ha_tv_picture
+    entity_id: media_player.android_tv_192_168_4_35
+    attribute: entity_picture
+    internal: true
+    on_value:
+      - if:
+          condition: { lambda: 'return x.size() <= 4;' }
+          then: [ lvgl.widget.hide: tv_art_img ]
+          else:
+            - if:
+                condition:
+                  lambda: |-
+                    return id(current_page) == 10 &&
+                           !(id(ha_yt_vid).state.size() == 11 &&
+                             id(ha_tv_app_name).state == "YouTube");
+                then:
+                  - lambda: |-
+                      std::string url = x;
+                      if (url.rfind("http", 0) != 0) url = std::string("http://192.168.4.195:8123") + url;
+                      id(tv_art_retry) = 0;
+                      id(tv_art).set_url(url);
+                  - component.update: tv_art
+
+  - platform: homeassistant
+    id: ha_yt_vid
+    entity_id: input_text.youtube_tv_video_id
+    internal: true
+    on_value:
+      - if:
+          condition: { lambda: 'return id(current_page) == 10 && x.size() == 11;' }
+          then:
+            - lambda: |-
+                id(yt_thumb).set_url(std::string("https://img.youtube.com/vi/") + x + "/hqdefault.jpg");
+            - component.update: yt_thumb
+
+  - platform: homeassistant
+    id: ha_lyrics_flag
+    entity_id: input_boolean.tv_art_cast_active
+    internal: true
+    on_value:
+      - script.execute: update_lyrics_btn
+
+  - platform: homeassistant
+    id: ha_timer_lines
+    entity_id: sensor.voice_timers_summary
+    attribute: lines
+    internal: true
+    on_value:
+      - lvgl.label.update:
+          id: timer_list_label
+          text: !lambda |-
+            std::string out = x;
+            size_t p;
+            while ((p = out.find('|')) != std::string::npos) out.replace(p, 1, "   ");
+            return out;
+
+  - platform: homeassistant
+    id: ha_weather_cond
+    entity_id: weather.forecast_home_3
+    internal: true
+    on_value:
+      - script.execute: update_clock_status
+
+  - platform: homeassistant
+    id: ha_frigate_object
+    entity_id: sensor.reolink01_last_object
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: |-
+              if (!id(frigate_seeded)) { id(frigate_seeded) = true; return false; }
+              if (x != "person") return false;
+              if (id(current_page) == 13) return false;
+              uint32_t now = millis();
+              if (id(last_alert_ms) != 0 && (now - id(last_alert_ms)) < 120000) return false;
+              id(last_alert_ms) = now;
+              return true;
+          then:
+            - lvgl.page.show: { id: alert_page, animation: FADE_IN, time: 200ms }
+            - light.turn_on: { id: lcd_backlight, brightness: 100% }
+            - script.execute: alert_auto_dismiss
+
+# ================= SCRIPTS =================
+script:
+  # ================= UNIFIED ROTARY STEP ENGINE =================
+  - id: knob_step
+    mode: queued
+    max_runs: 16
+    parameters:
+      steps: int
+    then:
+      - lambda: |-
+          id(last_user_touch) = millis();
+          int p = id(current_page);
+
+          if (p == 7) {
+            id(wake_from_clock)->execute();
+            return;
+          }
+
+          id(screen_idle_timer)->execute();
+          id(knob_debounce)->execute();
+
+          // ---- MAIN MENU (Page 0) ----
+          if (p == 0) {
+            id(menu_index) = (id(menu_index) + steps) % 5;
+            if (id(menu_index) < 0) id(menu_index) += 5;
+            id(update_menu_ui)->execute();
+          }
+          // ---- LIGHTS MENU (Page 1) ----
+          else if (p == 1) {
+            id(lights_menu_index) = (id(lights_menu_index) + steps) % 7;
+            if (id(lights_menu_index) < 0) id(lights_menu_index) += 7;
+            id(update_lights_menu_ui)->execute();
+          }
+          // ---- MUSIC VOLUME (Page 2 & 11) ----
+          else if (p == 2 || p == 11) {
+            id(music_vol_step)->execute(steps * 2);
+          }
+          // ---- THERMOSTAT (Page 3) ----
+          else if (p == 3) {
+            float nv = id(thermostat_target) + (float)steps * 1.0f;
+            if (nv > 90.0f) nv = 90.0f;
+            if (nv < 55.0f) nv = 55.0f;
+            id(thermostat_target) = nv;
+            id(knob_therm_ms) = millis();
+            id(thermostat_send)->execute();
+          }
+          // ---- SCENES (Page 4) ----
+          else if (p == 4) {
+            id(scene_ui_index) = (id(scene_ui_index) + steps) % 5;
+            if (id(scene_ui_index) < 0) id(scene_ui_index) += 5;
+            id(update_scene_ui)->execute();
+          }
+          // ---- OVERHEAD BRIGHTNESS (Page 5) ----
+          else if (p == 5) {
+            int nv = id(brightness_value) + (steps * 5);
+            if (nv > 100) nv = 100;
+            if (nv < 0) nv = 0;
+            id(brightness_value) = nv;
+            id(knob_bri_ms) = millis();
+            id(brightness_send)->execute();
+          }
+          // ---- TV SUB-MENU (Page 6) ----
+          else if (p == 6) {
+            id(tv_menu_index) = (id(tv_menu_index) + steps) % 8;
+            if (id(tv_menu_index) < 0) id(tv_menu_index) += 8;
+            id(update_tv_menu_ui)->execute();
+          }
+          // ---- SPOTLIGHTS (Page 8) ----
+          else if (p == 8) {
+            id(spotlights_menu_index) = (id(spotlights_menu_index) + steps) % 11;
+            if (id(spotlights_menu_index) < 0) id(spotlights_menu_index) += 11;
+            id(update_spotlights_menu_ui)->execute();
+          }
+          // ---- TV VOLUME (Page 9) ----
+          else if (p == 9) {
+            if (steps > 0) {
+              id(tv_vol_up_fire)->execute();
+            } else if (steps < 0) {
+              id(tv_vol_down_fire)->execute();
+            }
+          }
+          // ---- TV SEEK / FAST FORWARD (Page 10) ----
+          else if (p == 10) {
+            uint32_t now = millis();
+            uint32_t delta = now - id(tv_seek_last_ms);
+            id(tv_seek_last_ms) = now;
+            if (delta > 350) id(tv_seek_multiplier) = 1;
+            else if (delta < 50) { int m = id(tv_seek_multiplier) + 2; id(tv_seek_multiplier) = m > 8 ? 8 : m; }
+            else if (delta < 120) { int m = id(tv_seek_multiplier) + 1; id(tv_seek_multiplier) = m > 4 ? 4 : m; }
+
+            if (steps > 0) id(tv_seek_forward)->execute();
+            else if (steps < 0) id(tv_seek_rewind)->execute();
+          }
+          // ---- SLEEP TIMER (Page 12) ----
+          else if (p == 12) {
+            if (!id(sleep_active)) {
+              int nv = id(sleep_minutes) + (steps * 5);
+              if (nv > 120) nv = 120;
+              if (nv < 0) nv = 0;
+              id(sleep_minutes) = nv;
+              id(sleep_update_ui)->execute();
+            }
+          }
+          // ---- ACCENT LIGHTS BRIGHTNESS (Page 14) ----
+          else if (p == 14) {
+            int nv = id(accent_brightness_value) + (steps * 5);
+            if (nv > 100) nv = 100;
+            if (nv < 0) nv = 0;
+            id(accent_brightness_value) = nv;
+            id(accent_send_ui_and_debounce)->execute();
+          }
+          // ---- PLAYLISTS (Page 15) ----
+          else if (p == 15) {
+            id(playlist_index) = (id(playlist_index) + steps) % DIAL_PLAYLIST_COUNT;
+            if (id(playlist_index) < 0) id(playlist_index) += DIAL_PLAYLIST_COUNT;
+            id(update_playlist_ui)->execute();
+          }
+          // ---- CHILL OUT (Page 17) ----
+          else if (p == 17) {
+            id(chill_index) = (id(chill_index) + steps) % DIAL_CHILL_COUNT;
+            if (id(chill_index) < 0) id(chill_index) += DIAL_CHILL_COUNT;
+            id(update_chill_ui)->execute();
+          }
+
+  # --- TV Volume Step Triggers ---
+  - id: tv_vol_up_fire
+    then:
+      - lvgl.label.update: { id: tv_vol_direction, text: "VOL +" }
+      - homeassistant.service:
+          service: button.press
+          data: { entity_id: button.lnlinkha_4101599dceac00009aa47143435d }
+      - script.execute: tv_vol_hint_reset
+
+  - id: tv_vol_down_fire
+    then:
+      - lvgl.label.update: { id: tv_vol_direction, text: "VOL -" }
+      - homeassistant.service:
+          service: button.press
+          data: { entity_id: button.lnlinkha_4101599dceac00009aa47143435d_2 }
+      - script.execute: tv_vol_hint_reset
+
+  # --- TV Seek Triggers ---
+  - id: tv_seek_forward
+    then:
+      - homeassistant.service:
+          service: androidtv.adb_command
+          data: { entity_id: media_player.android_tv_192_168_4_35 }
+          data_template:
+            command: !lambda |-
+              std::string cmd = "input keyevent";
+              for (int i = 0; i < id(tv_seek_multiplier); i++) cmd += " 90";
+              return cmd;
+      - lvgl.label.update:
+          id: tv_seek_hint
+          text: !lambda |-
+            static char buf[24];
+            if (id(tv_seek_multiplier) > 1) snprintf(buf, sizeof(buf), "Fast Forward  >> x%d", id(tv_seek_multiplier));
+            else snprintf(buf, sizeof(buf), "Fast Forward  >>");
+            return buf;
+          text_color: 0x81C995
+      - script.execute: seek_hint_reset
+      - script.execute: reset_seek_ramp
+
+  - id: tv_seek_rewind
+    then:
+      - homeassistant.service:
+          service: androidtv.adb_command
+          data: { entity_id: media_player.android_tv_192_168_4_35 }
+          data_template:
+            command: !lambda |-
+              std::string cmd = "input keyevent";
+              for (int i = 0; i < id(tv_seek_multiplier); i++) cmd += " 89";
+              return cmd;
+      - lvgl.label.update:
+          id: tv_seek_hint
+          text: !lambda |-
+            static char buf[24];
+            if (id(tv_seek_multiplier) > 1) snprintf(buf, sizeof(buf), "<< x%d  Rewind", id(tv_seek_multiplier));
+            else snprintf(buf, sizeof(buf), "<<  Rewind");
+            return buf;
+          text_color: 0x81C995
+      - script.execute: seek_hint_reset
+      - script.execute: reset_seek_ramp
+
+  # --- Overhead Brightness Send (Debounced to HA) ---
+  - id: brightness_send
+    mode: restart
+    then:
+      - lvgl.label.update:
+          id: brightness_value_label
+          text: !lambda |-
+            static char buf[16];
+            snprintf(buf, sizeof(buf), "%d%%", id(brightness_value));
+            return buf;
+      - lvgl.arc.update:
+          id: brightness_arc
+          value: !lambda 'return id(brightness_value);'
+      - delay: 250ms
+      - homeassistant.service:
+          service: light.turn_on
+          data: { entity_id: light.living_room_main_lights }
+          data_template:
+            brightness_pct: !lambda 'return id(brightness_value);'
+
+  # --- Accent Brightness Send ---
+  - id: accent_send_ui_and_debounce
+    then:
+      - lvgl.label.update:
+          id: accent_value_label
+          text: !lambda |-
+            static char buf[16];
+            snprintf(buf, sizeof(buf), "%d%%", id(accent_brightness_value));
+            return buf;
+      - lvgl.arc.update:
+          id: accent_arc
+          value: !lambda 'return id(accent_brightness_value);'
+      - script.execute: accent_send
+
+  # --- Thermostat Target Send (Debounced to HA) ---
+  - id: thermostat_send
+    mode: restart
+    then:
+      - lvgl.label.update:
+          id: thermostat_target_label
+          text: !lambda |-
+            static char buf[16];
+            snprintf(buf, sizeof(buf), "%.0f\xc2\xb0", id(thermostat_target));
+            return buf;
+      - delay: 400ms
+      - homeassistant.service:
+          service: climate.set_temperature
+          data: { entity_id: climate.living_room_thermostat }
+          data_template:
+            temperature: !lambda 'return id(thermostat_target);'
+
+  - id: screen_idle_timer
+    mode: restart
+    then:
+      - light.turn_on:
+          id: lcd_backlight
+          brightness: 100%
+      - delay: 30sec
+      - if:
+          condition:
+            lambda: 'return id(ha_music_state).state != "playing" && id(ha_tv_state).state != "playing";'
+          then:
+            - lvgl.page.show:
+                id: clock_page
+                animation: FADE_IN
+                time: 400ms
+            - light.turn_on:
+                id: lcd_backlight
+                brightness: !lambda |-
+                  auto t = id(ha_time).now();
+                  if (t.is_valid() && (t.hour >= 22 || t.hour < 7)) return 0.10f;
+                  return 0.30f;
+
+  - id: wake_from_clock
+    then:
+      - if:
+          condition:
+            lambda: 'return id(ha_tv_state).state == "playing";'
+          then:
+            - lvgl.page.show: { id: tv_now_playing_page, animation: OVER_BOTTOM, time: 240ms }
+          else:
+            - if:
+                condition:
+                  lambda: 'return id(ha_music_state).state == "playing";'
+                then:
+                  - lvgl.page.show: { id: music_now_playing_page, animation: OVER_BOTTOM, time: 240ms }
+                else:
+                  - lvgl.page.show: { id: main_menu_page, animation: OVER_BOTTOM, time: 240ms }
+      - script.execute: screen_idle_timer
+
+  - id: artist_stale_check
+    mode: restart
+    then:
+      - delay: 2500ms
+      - if:
+          condition:
+            lambda: 'return (millis() - id(music_artist_ms)) > 3000;'
+          then:
+            - lambda: 'id(artist_stale) = true;'
+            - if:
+                condition:
+                  lambda: 'return id(current_page) == 11;'
+                then:
+                  - lvgl.label.update:
+                      id: music_now_artist
+                      text: ""
+
+  - id: knob_debounce
+    mode: restart
+    then:
+      - lambda: 'id(knob_active) = true;'
+      - delay: 10s
+      - lambda: |-
+          id(knob_active) = false;
+          int bd = id(ha_brightness_raw) - id(brightness_value);
+          if (bd < 0) bd = -bd;
+          if (id(ha_brightness_raw) >= 0 &&
+              (int32_t)(id(ha_bri_ms) - id(knob_bri_ms)) > 0 && bd > 1) {
+            id(brightness_value) = id(ha_brightness_raw);
+          }
+          if (id(ha_therm_target_raw) > -999.0f &&
+              (int32_t)(id(ha_therm_ms) - id(knob_therm_ms)) > 0) {
+            id(thermostat_target) = id(ha_therm_target_raw);
+          }
+      - lvgl.label.update:
+          id: volume_display
+          text: !lambda |-
+            static char buf[8];
+            snprintf(buf, sizeof(buf), "%d%%", id(volume_value));
+            return buf;
+      - lvgl.arc.update:
+          id: volume_arc
+          value: !lambda 'return id(volume_value);'
+      - lvgl.label.update:
+          id: brightness_value_label
+          text: !lambda |-
+            static char buf[16];
+            snprintf(buf, sizeof(buf), "%d%%", id(brightness_value));
+            return buf;
+      - lvgl.arc.update:
+          id: brightness_arc
+          value: !lambda 'return id(brightness_value);'
+      - lvgl.label.update:
+          id: thermostat_target_label
+          text: !lambda |-
+            static char buf[16];
+            snprintf(buf, sizeof(buf), "%.0f\xc2\xb0", id(thermostat_target));
+            return buf;
+
+  - id: music_vol_step
+    mode: queued
+    max_runs: 32
+    parameters:
+      delta: int
+    then:
+      - lambda: |-
+          uint32_t now = millis();
+          int before = id(volume_value);
+          int v = before + delta;
+          if (v > 100) v = 100;
+          if (v < 0) v = 0;
+          id(volume_value) = v;
+          id(knob_vol_ms) = now;
+      - lvgl.label.update:
+          id: volume_display
+          text: !lambda |-
+            static char buf[8];
+            snprintf(buf, sizeof(buf), "%d%%", id(volume_value));
+            return buf;
+      - lvgl.arc.update:
+          id: volume_arc
+          value: !lambda 'return id(volume_value);'
+      - if:
+          condition:
+            not:
+              script.is_running: music_vol_send
+          then:
+            - script.execute: music_vol_send
+
+  - id: music_vol_send
+    mode: single
+    then:
+      - while:
+          condition:
+            lambda: 'return id(volume_value) != id(vol_last_sent);'
+          then:
+            - delay: 200ms
+            - script.execute: music_vol_push
+
+  - id: music_vol_push
+    mode: single
+    then:
+      - lambda: |-
+          id(vol_last_sent) = id(volume_value);
+          id(vol_sent_ms) = millis();
+      - homeassistant.service:
+          service: media_player.volume_set
+          data:
+            entity_id: media_player.living_room_speakers_3
+            volume_level: !lambda 'return float(id(volume_value)) / 100.0f;'
+
+  - id: update_lyrics_btn
+    then:
+      - if:
+          condition:
+            lambda: 'return id(ha_lyrics_flag).state == "on";'
+          then:
+            - lvgl.widget.update: { id: lyrics_btn, bg_color: 0x3C1860 }
+            - lvgl.label.update: { id: lyrics_btn_label, text: "Lyrics On", text_color: 0xFFFFFF }
+          else:
+            - lvgl.widget.update: { id: lyrics_btn, bg_color: 0x1C1C1E }
+            - lvgl.label.update: { id: lyrics_btn_label, text: "Lyrics", text_color: 0xBB86FC }
+
+  - id: music_next_flash
+    mode: restart
+    then:
+      - lvgl.label.update: { id: music_now_state_label, text: "Next ▶" }
+      - delay: 1200ms
+      - lvgl.label.update:
+          id: music_now_state_label
+          text: !lambda |-
+            static char buf[16];
+            std::string s = id(ha_music_state).state;
+            if (s == "playing") snprintf(buf, sizeof(buf), "Playing");
+            else if (s == "paused") snprintf(buf, sizeof(buf), "Paused");
+            else if (s == "idle") snprintf(buf, sizeof(buf), "Idle");
+            else snprintf(buf, sizeof(buf), "%s", s.c_str());
+            return buf;
+
+  - id: music_art_retry
+    mode: restart
+    then:
+      - delay: 2s
+      - component.update: album_art
+
+  - id: tv_art_retry_script
+    mode: restart
+    then:
+      - delay: 2s
+      - component.update: tv_art
+
+  - id: music_art_refresh
+    then:
+      - if:
+          condition:
+            lambda: 'return id(ha_music_picture).state.size() > 4;'
+          then:
+            - lambda: |-
+                std::string url = id(ha_music_picture).state;
+                if (url.rfind("http", 0) != 0) url = std::string("http://192.168.4.195:8123") + url;
+                id(art_retry) = 0;
+                id(album_art).set_url(url);
+            - component.update: album_art
+
+  - id: tv_screencap_refresh
+    then:
+      - if:
+          condition:
+            lambda: 'return id(ha_tv_picture).state.size() > 4;'
+          then:
+            - lambda: |-
+                std::string url = id(ha_tv_picture).state;
+                if (url.rfind("http", 0) != 0) url = std::string("http://192.168.4.195:8123") + url;
+                id(tv_art_retry) = 0;
+                id(tv_art).set_url(url);
+            - component.update: tv_art
+
+  - id: tv_art_refresh
+    then:
+      - if:
+          condition:
+            lambda: |-
+              return id(ha_yt_vid).state.size() == 11 &&
+                     id(ha_tv_app_name).state == "YouTube";
+          then:
+            - lambda: |-
+                id(yt_thumb).set_url(std::string("https://img.youtube.com/vi/") + id(ha_yt_vid).state + "/hqdefault.jpg");
+            - component.update: yt_thumb
+          else:
+            - script.execute: tv_screencap_refresh
+
+  - id: update_playlist_ui
+    then:
+      - lvgl.label.update:
+          id: playlist_name_label
+          text: !lambda 'return std::string(DIAL_PLAYLIST_NAMES[id(playlist_index)]);'
+      - lvgl.label.update:
+          id: playlist_counter_label
+          text: !lambda |-
+            static char buf[16];
+            snprintf(buf, sizeof(buf), "%d of %d", id(playlist_index) + 1, DIAL_PLAYLIST_COUNT);
+            return buf;
+
+  - id: flash_playlist_hint
+    mode: restart
+    then:
+      - lvgl.label.update: { id: playlist_action_label, text: "Playing!", text_color: 0xBB86FC }
+      - delay: 1500ms
+      - lvgl.label.update: { id: playlist_action_label, text: "Press to play" }
+
+  - id: update_chill_ui
+    then:
+      - lvgl.label.update:
+          id: chill_name_label
+          text: !lambda 'return std::string(DIAL_CHILL_NAMES[id(chill_index)]);'
+      - lvgl.label.update:
+          id: chill_counter_label
+          text: !lambda |-
+            static char buf[16];
+            snprintf(buf, sizeof(buf), "%d of %d", id(chill_index) + 1, DIAL_CHILL_COUNT);
+            return buf;
+
+  - id: flash_chill_hint
+    mode: restart
+    then:
+      - lvgl.label.update: { id: chill_action_label, text: "Sweet dreams...", text_color: 0x4DD0E1 }
+      - delay: 1500ms
+      - lvgl.label.update: { id: chill_action_label, text: "Press to play", text_color: 0x9E9EA4 }
+
+  - id: accent_send
+    mode: restart
+    then:
+      - delay: 250ms
+      - homeassistant.service:
+          service: light.turn_on
+          data:
+            entity_id: light.living_room_art_light, light.mantel_lights_2, light.speaker_light, light.slat_wall_3, light.slat_wall_light_2, light.wall_slat_light_1, light.uplighter_floor_lamp, light.living_room_plant_ligh, light.couch_lights, light.gold_lamp
+          data_template:
+            brightness_pct: !lambda 'return id(accent_brightness_value);'
+
+  - id: reset_seek_ramp
+    mode: restart
+    then:
+      - delay: 400ms
+      - lambda: 'id(tv_seek_multiplier) = 1;'
+
+  - id: seek_hint_reset
+    mode: restart
+    then:
+      - delay: 1200ms
+      - if:
+          condition: { lambda: 'return id(current_page) == 10;' }
+          then:
+            - lvgl.label.update:
+                id: tv_seek_hint
+                text: "Spin: seek  |  Press: play/pause"
+                text_color: 0xFFFFFF
+
+  - id: tv_vol_hint_reset
+    mode: restart
+    then:
+      - delay: 1500ms
+      - if:
+          condition: { lambda: 'return id(current_page) == 9;' }
+          then:
+            - lvgl.label.update:
+                id: tv_vol_direction
+                text: "Spin to adjust"
+
+  - id: encoder_hold_timer
+    mode: restart
+    then:
+      - delay: 700ms
+      - lambda: 'id(long_press_fired) = true;'
+      - if:
+          condition:
+            lambda: 'return id(current_page) == 0;'
+          then:
+            - homeassistant.service:
+                service: light.toggle
+                data: { entity_id: light.living_room_main_lights }
+            - lvgl.label.update:
+                id: main_menu_hint
+                text: "Lights toggled"
+                text_color: 0xF4A535
+            - delay: 1400ms
+            - lvgl.label.update:
+                id: main_menu_hint
+                text: "Press: select   Hold: lights"
+                text_color: 0x9E9EA4
+          else:
+            - lvgl.page.show: { id: main_menu_page, animation: OVER_BOTTOM, time: 240ms }
+
+  - id: flash_lights_hint
+    mode: restart
+    then:
+      - lvgl.label.update: { id: lights_menu_hint, text: "Sent!", text_color: 0xF4A535 }
+      - delay: 1200ms
+      - lvgl.label.update: { id: lights_menu_hint, text: "Press to select", text_color: 0x9E9EA4 }
+
+  - id: update_clock_status
+    then:
+      - lvgl.label.update:
+          id: clock_status_label
+          text: !lambda |-
+            static char buf[64];
+            std::string c = id(ha_weather_cond).state;
+            const char* cond = "";
+            if (c == "sunny") cond = "Sunny";
+            else if (c == "clear-night") cond = "Clear";
+            else if (c == "partlycloudy") cond = "Partly cloudy";
+            else if (c == "cloudy") cond = "Cloudy";
+            else if (c == "rainy") cond = "Rain";
+            else if (c == "pouring") cond = "Heavy rain";
+            else if (c == "lightning" || c == "lightning-rainy") cond = "Storms";
+            else if (c == "snowy" || c == "snowy-rainy") cond = "Snow";
+            else if (c == "fog") cond = "Fog";
+            else if (c == "windy" || c == "windy-variant") cond = "Windy";
+            else if (c == "hail") cond = "Hail";
+            else if (c == "exceptional") cond = "Severe";
+            float out = id(ha_weather_temp).state;
+            if (!isnan(out) && cond[0] != 0) {
+              snprintf(buf, sizeof(buf), "%.0f\xc2\xb0 %s   \xc2\xb7   Inside %.0f\xc2\xb0", out, cond, id(thermostat_current));
+            } else {
+              snprintf(buf, sizeof(buf), "Inside %.0f\xc2\xb0", id(thermostat_current));
+            }
+            return buf;
+
+  - id: sleep_update_ui
+    then:
+      - lvgl.label.update:
+          id: sleep_value_label
+          text: !lambda |-
+            static char buf[24];
+            if (id(sleep_minutes) <= 0) return std::string("Off");
+            snprintf(buf, sizeof(buf), "%d min", id(sleep_minutes));
+            return std::string(buf);
+      - lvgl.label.update:
+          id: sleep_hint
+          text: !lambda |-
+            if (id(sleep_active)) return std::string("Timer running   \xc2\xb7   Press to cancel");
+            if (id(sleep_minutes) > 0) return std::string("Press to start");
+            return std::string("Spin to set");
+      - lvgl.label.update:
+          id: clock_sleep_label
+          text: !lambda |-
+            static char buf[24];
+            if (!id(sleep_active)) return std::string("");
+            snprintf(buf, sizeof(buf), "Sleep in %dm", id(sleep_minutes));
+            return std::string(buf);
+
+  - id: sleep_timer_run
+    mode: restart
+    then:
+      - while:
+          condition:
+            lambda: 'return id(sleep_minutes) > 0;'
+          then:
+            - delay: 60s
+            - lambda: 'id(sleep_minutes) -= 1;'
+            - script.execute: sleep_update_ui
+      - lambda: 'id(sleep_active) = false;'
+      - if:
+          condition:
+            lambda: 'return id(ha_tv_state).state == "playing" || id(ha_tv_state).state == "paused";'
+          then:
+            - homeassistant.service:
+                service: media_player.media_pause
+                data: { entity_id: media_player.living_room_tv_cast }
+            - delay: 1s
+            - homeassistant.service:
+                service: automation.trigger
+                data: { entity_id: automation.living_room_table_button_quick_press }
+      - homeassistant.service:
+          service: light.turn_off
+          data:
+            entity_id: light.living_room_main_lights, light.living_room_art_light, light.mantel_lights_2, light.speaker_light, light.slat_wall_3, light.slat_wall_light_2, light.wall_slat_light_1, light.uplighter_floor_lamp, light.living_room_plant_ligh, light.couch_lights, light.gold_lamp
+            transition: "5"
+      - script.execute: sleep_update_ui
+      - lvgl.page.show: { id: clock_page, animation: FADE_IN, time: 400ms }
+      - light.turn_on: { id: lcd_backlight, brightness: 10% }
+
+  - id: alert_auto_dismiss
+    mode: restart
+    then:
+      - delay: 10s
+      - if:
+          condition: { lambda: 'return id(current_page) == 13;' }
+          then: [ script.execute: wake_from_clock ]
+
+  - id: activate_spotlight
+    then:
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 0;' }, then: [ homeassistant.service: { service: button.press, data: { entity_id: button.lnlinkha_4101599dceac0000c3a7bc7e2a1e_8 } } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 1;' }, then: [ homeassistant.service: { service: button.press, data: { entity_id: button.lnlinkha_4101599dceac0000c3a7bc7e2a1e_7 } } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 2;' }, then: [ homeassistant.service: { service: button.press, data: { entity_id: button.lnlinkha_4101599dceac0000c3a7bc7e2a1e_3 } } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 3;' }, then: [ homeassistant.service: { service: button.press, data: { entity_id: button.lnlinkha_4101599dceac0000c3a7bc7e2a1e_5 } } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 4;' }, then: [ homeassistant.service: { service: button.press, data: { entity_id: button.lnlinkha_4101599dceac0000c3a7bc7e2a1e_12 } } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 5;' }, then: [ homeassistant.service: { service: button.press, data: { entity_id: button.lnlinkha_4101599dceac0000c3a7bc7e2a1e_11 } } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 6;' }, then: [ homeassistant.service: { service: button.press, data: { entity_id: button.lnlinkha_4101599dceac0000c3a7bc7e2a1e_10 } } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 7;' }, then: [ homeassistant.service: { service: button.press, data: { entity_id: button.lnlinkha_4101599dceac0000c3a7bc7e2a1e } } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 8;' }, then: [ homeassistant.service: { service: button.press, data: { entity_id: button.lnlinkha_4101599dceac0000c3a7bc7e2a1e_2 } } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 9;' }, then: [ homeassistant.service: { service: button.press, data: { entity_id: button.lnlinkha_4101599dceac0000c3a7bc7e2a1e_9 } } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 10;' }, then: [ homeassistant.service: { service: button.press, data: { entity_id: button.lnlinkha_4101599dceac0000c3a7bc7e2a1e_4 } } ] }
+
+  - id: update_spotlights_menu_ui
+    then:
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 0;' }, then: [ lvgl.label.update: { id: active_spotlight_name, text: "Blue" }, lvgl.label.update: { id: spotlight_dots, text: "1 of 11" }, lvgl.widget.update: { id: sp_g1, x: 0, y: -15 }, lvgl.widget.update: { id: sp_g2, x: 0, y: -22 }, lvgl.widget.update: { id: sp_g3, x: 0, y: -30 } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 1;' }, then: [ lvgl.label.update: { id: active_spotlight_name, text: "Green" }, lvgl.label.update: { id: spotlight_dots, text: "2 of 11" }, lvgl.widget.update: { id: sp_g1, x: 8, y: -12 }, lvgl.widget.update: { id: sp_g2, x: 12, y: -18 }, lvgl.widget.update: { id: sp_g3, x: 16, y: -25 } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 2;' }, then: [ lvgl.label.update: { id: active_spotlight_name, text: "Warm light" }, lvgl.label.update: { id: spotlight_dots, text: "3 of 11" }, lvgl.widget.update: { id: sp_g1, x: 13, y: -6 }, lvgl.widget.update: { id: sp_g2, x: 20, y: -9 }, lvgl.widget.update: { id: sp_g3, x: 27, y: -12 } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 3;' }, then: [ lvgl.label.update: { id: active_spotlight_name, text: "Cool light" }, lvgl.label.update: { id: spotlight_dots, text: "4 of 11" }, lvgl.widget.update: { id: sp_g1, x: 14, y: 2 }, lvgl.widget.update: { id: sp_g2, x: 22, y: 3 }, lvgl.widget.update: { id: sp_g3, x: 29, y: 4 } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 4;' }, then: [ lvgl.label.update: { id: active_spotlight_name, text: "High" }, lvgl.label.update: { id: spotlight_dots, text: "5 of 11" }, lvgl.widget.update: { id: sp_g1, x: 11, y: 9 }, lvgl.widget.update: { id: sp_g2, x: 17, y: 14 }, lvgl.widget.update: { id: sp_g3, x: 22, y: 19 } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 5;' }, then: [ lvgl.label.update: { id: active_spotlight_name, text: "Medium" }, lvgl.label.update: { id: spotlight_dots, text: "6 of 11" }, lvgl.widget.update: { id: sp_g1, x: 4, y: 14 }, lvgl.widget.update: { id: sp_g2, x: 6, y: 21 }, lvgl.widget.update: { id: sp_g3, x: 8, y: 28 } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 6;' }, then: [ lvgl.label.update: { id: active_spotlight_name, text: "Lowest" }, lvgl.label.update: { id: spotlight_dots, text: "7 of 11" }, lvgl.widget.update: { id: sp_g1, x: -4, y: 14 }, lvgl.widget.update: { id: sp_g2, x: -6, y: 21 }, lvgl.widget.update: { id: sp_g3, x: -8, y: 28 } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 7;' }, then: [ lvgl.label.update: { id: active_spotlight_name, text: "On" }, lvgl.label.update: { id: spotlight_dots, text: "8 of 11" }, lvgl.widget.update: { id: sp_g1, x: -11, y: 9 }, lvgl.widget.update: { id: sp_g2, x: -17, y: 14 }, lvgl.widget.update: { id: sp_g3, x: -22, y: 19 } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 8;' }, then: [ lvgl.label.update: { id: active_spotlight_name, text: "Off" }, lvgl.label.update: { id: spotlight_dots, text: "9 of 11" }, lvgl.widget.update: { id: sp_g1, x: -14, y: 2 }, lvgl.widget.update: { id: sp_g2, x: -22, y: 3 }, lvgl.widget.update: { id: sp_g3, x: -29, y: 4 } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 9;' }, then: [ lvgl.label.update: { id: active_spotlight_name, text: "Cycle lights" }, lvgl.label.update: { id: spotlight_dots, text: "10 of 11" }, lvgl.widget.update: { id: sp_g1, x: -13, y: -6 }, lvgl.widget.update: { id: sp_g2, x: -20, y: -9 }, lvgl.widget.update: { id: sp_g3, x: -27, y: -12 } ] }
+      - if: { condition: { lambda: 'return id(spotlights_menu_index) == 10;' }, then: [ lvgl.label.update: { id: active_spotlight_name, text: "Daylight" }, lvgl.label.update: { id: spotlight_dots, text: "11 of 11" }, lvgl.widget.update: { id: sp_g1, x: -8, y: -12 }, lvgl.widget.update: { id: sp_g2, x: -12, y: -18 }, lvgl.widget.update: { id: sp_g3, x: -16, y: -25 } ] }
+
+  - id: update_scene_ui
+    then:
+      - if: { condition: { lambda: 'return id(scene_ui_index) == 0;' }, then: [ lvgl.label.update: { id: active_scene_name, text: "Relaxing Night 2" }, lvgl.label.update: { id: scene_dots, text: "•  ·  ·  ·  ·" }, lvgl.widget.update: { id: sc_g1, x: 0, y: -15 }, lvgl.widget.update: { id: sc_g2, x: 0, y: -22 }, lvgl.widget.update: { id: sc_g3, x: 0, y: -30 } ] }
+      - if: { condition: { lambda: 'return id(scene_ui_index) == 1;' }, then: [ lvgl.label.update: { id: active_scene_name, text: "Day Time" }, lvgl.label.update: { id: scene_dots, text: "·  •  ·  ·  ·" }, lvgl.widget.update: { id: sc_g1, x: 14, y: -4 }, lvgl.widget.update: { id: sc_g2, x: 21, y: -6 }, lvgl.widget.update: { id: sc_g3, x: 28, y: -9 } ] }
+      - if: { condition: { lambda: 'return id(scene_ui_index) == 2;' }, then: [ lvgl.label.update: { id: active_scene_name, text: "Relaxing Night" }, lvgl.label.update: { id: scene_dots, text: "·  ·  •  ·  ·" }, lvgl.widget.update: { id: sc_g1, x: 8, y: 12 }, lvgl.widget.update: { id: sc_g2, x: 13, y: 18 }, lvgl.widget.update: { id: sc_g3, x: 17, y: 24 } ] }
+      - if: { condition: { lambda: 'return id(scene_ui_index) == 3;' }, then: [ lvgl.label.update: { id: active_scene_name, text: "Quiet" }, lvgl.label.update: { id: scene_dots, text: "·  ·  ·  •  ·" }, lvgl.widget.update: { id: sc_g1, x: -8, y: 12 }, lvgl.widget.update: { id: sc_g2, x: -13, y: 18 }, lvgl.widget.update: { id: sc_g3, x: -17, y: 24 } ] }
+      - if: { condition: { lambda: 'return id(scene_ui_index) == 4;' }, then: [ lvgl.label.update: { id: active_scene_name, text: "Funky" }, lvgl.label.update: { id: scene_dots, text: "·  ·  ·  ·  •" }, lvgl.widget.update: { id: sc_g1, x: -14, y: -4 }, lvgl.widget.update: { id: sc_g2, x: -21, y: -6 }, lvgl.widget.update: { id: sc_g3, x: -28, y: -9 } ] }
+
+  - id: activate_scene
+    then:
+      - if: { condition: { lambda: 'return id(scene_ui_index) == 0;' }, then: [ homeassistant.service: { service: scene.turn_on, data: { entity_id: scene.relaxing_night_living_room_2 } } ] }
+      - if: { condition: { lambda: 'return id(scene_ui_index) == 1;' }, then: [ homeassistant.service: { service: scene.turn_on, data: { entity_id: scene.day_time } } ] }
+      - if: { condition: { lambda: 'return id(scene_ui_index) == 2;' }, then: [ homeassistant.service: { service: scene.turn_on, data: { entity_id: scene.relaxing_night } } ] }
+      - if: { condition: { lambda: 'return id(scene_ui_index) == 3;' }, then: [ homeassistant.service: { service: scene.turn_on, data: { entity_id: scene.living_room_quiet } } ] }
+      - if: { condition: { lambda: 'return id(scene_ui_index) == 4;' }, then: [ homeassistant.service: { service: scene.turn_on, data: { entity_id: scene.funky } } ] }
+
+  - id: update_lights_menu_ui
+    then:
+      - if: { condition: { lambda: 'return id(lights_menu_index) == 0;' }, then: [ lvgl.label.update: { id: lights_menu_center, text: "Overhead" }, lvgl.label.update: { id: lights_menu_dots, text: "•  ·  ·  ·  ·  ·  ·" }, lvgl.widget.update: { id: lm_g1, x: 0, y: -15 }, lvgl.widget.update: { id: lm_g2, x: 0, y: -22 }, lvgl.widget.update: { id: lm_g3, x: 0, y: -30 } ] }
+      - if: { condition: { lambda: 'return id(lights_menu_index) == 1;' }, then: [ lvgl.label.update: { id: lights_menu_center, text: "Accent" }, lvgl.label.update: { id: lights_menu_dots, text: "·  •  ·  ·  ·  ·  ·" }, lvgl.widget.update: { id: lm_g1, x: 12, y: -9 }, lvgl.widget.update: { id: lm_g2, x: 17, y: -14 }, lvgl.widget.update: { id: lm_g3, x: 23, y: -19 } ] }
+      - if: { condition: { lambda: 'return id(lights_menu_index) == 2;' }, then: [ lvgl.label.update: { id: lights_menu_center, text: "Spotlights" }, lvgl.label.update: { id: lights_menu_dots, text: "·  ·  •  ·  ·  ·  ·" }, lvgl.widget.update: { id: lm_g1, x: 15, y: 3 }, lvgl.widget.update: { id: lm_g2, x: 21, y: 5 }, lvgl.widget.update: { id: lm_g3, x: 29, y: 7 } ] }
+      - if: { condition: { lambda: 'return id(lights_menu_index) == 3;' }, then: [ lvgl.label.update: { id: lights_menu_center, text: "Scenes" }, lvgl.label.update: { id: lights_menu_dots, text: "·  ·  ·  •  ·  ·  ·" }, lvgl.widget.update: { id: lm_g1, x: 7, y: 14 }, lvgl.widget.update: { id: lm_g2, x: 10, y: 20 }, lvgl.widget.update: { id: lm_g3, x: 13, y: 27 } ] }
+      - if: { condition: { lambda: 'return id(lights_menu_index) == 4;' }, then: [ lvgl.label.update: { id: lights_menu_center, text: "Light Sync" }, lvgl.label.update: { id: lights_menu_dots, text: "·  ·  ·  ·  •  ·  ·" }, lvgl.widget.update: { id: lm_g1, x: -7, y: 14 }, lvgl.widget.update: { id: lm_g2, x: -10, y: 20 }, lvgl.widget.update: { id: lm_g3, x: -13, y: 27 } ] }
+      - if: { condition: { lambda: 'return id(lights_menu_index) == 5;' }, then: [ lvgl.label.update: { id: lights_menu_center, text: "All Off" }, lvgl.label.update: { id: lights_menu_dots, text: "·  ·  ·  ·  ·  •  ·" }, lvgl.widget.update: { id: lm_g1, x: -15, y: 3 }, lvgl.widget.update: { id: lm_g2, x: -21, y: 5 }, lvgl.widget.update: { id: lm_g3, x: -29, y: 7 } ] }
+      - if: { condition: { lambda: 'return id(lights_menu_index) == 6;' }, then: [ lvgl.label.update: { id: lights_menu_center, text: "Back" }, lvgl.label.update: { id: lights_menu_dots, text: "·  ·  ·  ·  ·  ·  •" }, lvgl.widget.update: { id: lm_g1, x: -12, y: -9 }, lvgl.widget.update: { id: lm_g2, x: -17, y: -14 }, lvgl.widget.update: { id: lm_g3, x: -23, y: -19 } ] }
+
+  - id: update_tv_menu_ui
+    then:
+      - if: { condition: { lambda: 'return id(tv_menu_index) == 0;' }, then: [ lvgl.label.update: { id: tv_menu_center, text: "Now Playing" }, lvgl.label.update: { id: tv_menu_dots, text: "•  ·  ·  ·  ·  ·  ·  ·" }, lvgl.widget.update: { id: tv_g1, x: 0, y: -15 }, lvgl.widget.update: { id: tv_g2, x: 0, y: -22 }, lvgl.widget.update: { id: tv_g3, x: 0, y: -30 } ] }
+      - if: { condition: { lambda: 'return id(tv_menu_index) == 1;' }, then: [ lvgl.label.update: { id: tv_menu_center, text: "Volume" }, lvgl.label.update: { id: tv_menu_dots, text: "·  •  ·  ·  ·  ·  ·  ·" }, lvgl.widget.update: { id: tv_g1, x: 11, y: -11 }, lvgl.widget.update: { id: tv_g2, x: 16, y: -16 }, lvgl.widget.update: { id: tv_g3, x: 21, y: -21 } ] }
+      - if: { condition: { lambda: 'return id(tv_menu_index) == 2;' }, then: [ lvgl.label.update: { id: tv_menu_center, text: "Sleep Timer" }, lvgl.label.update: { id: tv_menu_dots, text: "·  ·  •  ·  ·  ·  ·  ·" }, lvgl.widget.update: { id: tv_g1, x: 15, y: 0 }, lvgl.widget.update: { id: tv_g2, x: 22, y: 0 }, lvgl.widget.update: { id: tv_g3, x: 30, y: 0 } ] }
+      - if: { condition: { lambda: 'return id(tv_menu_index) == 3;' }, then: [ lvgl.label.update: { id: tv_menu_center, text: "Power" }, lvgl.label.update: { id: tv_menu_dots, text: "·  ·  ·  •  ·  ·  ·  ·" }, lvgl.widget.update: { id: tv_g1, x: 11, y: 11 }, lvgl.widget.update: { id: tv_g2, x: 16, y: 16 }, lvgl.widget.update: { id: tv_g3, x: 21, y: 21 } ] }
+      - if: { condition: { lambda: 'return id(tv_menu_index) == 4;' }, then: [ lvgl.label.update: { id: tv_menu_center, text: "Stremio" }, lvgl.label.update: { id: tv_menu_dots, text: "·  ·  ·  ·  •  ·  ·  ·" }, lvgl.widget.update: { id: tv_g1, x: 0, y: 15 }, lvgl.widget.update: { id: tv_g2, x: 0, y: 22 }, lvgl.widget.update: { id: tv_g3, x: 0, y: 30 } ] }
+      - if: { condition: { lambda: 'return id(tv_menu_index) == 5;' }, then: [ lvgl.label.update: { id: tv_menu_center, text: "YouTube" }, lvgl.label.update: { id: tv_menu_dots, text: "·  ·  ·  ·  ·  •  ·  ·" }, lvgl.widget.update: { id: tv_g1, x: -11, y: 11 }, lvgl.widget.update: { id: tv_g2, x: -16, y: 16 }, lvgl.widget.update: { id: tv_g3, x: -21, y: 21 } ] }
+      - if: { condition: { lambda: 'return id(tv_menu_index) == 6;' }, then: [ lvgl.label.update: { id: tv_menu_center, text: "Moonlight" }, lvgl.label.update: { id: tv_menu_dots, text: "·  ·  ·  ·  ·  ·  •  ·" }, lvgl.widget.update: { id: tv_g1, x: -15, y: 0 }, lvgl.widget.update: { id: tv_g2, x: -22, y: 0 }, lvgl.widget.update: { id: tv_g3, x: -30, y: 0 } ] }
+      - if: { condition: { lambda: 'return id(tv_menu_index) == 7;' }, then: [ lvgl.label.update: { id: tv_menu_center, text: "Back" }, lvgl.label.update: { id: tv_menu_dots, text: "·  ·  ·  ·  ·  ·  ·  •" }, lvgl.widget.update: { id: tv_g1, x: -11, y: -11 }, lvgl.widget.update: { id: tv_g2, x: -16, y: -16 }, lvgl.widget.update: { id: tv_g3, x: -21, y: -21 } ] }
+
+  - id: update_menu_ui
+    then:
+      - if: { condition: { lambda: 'return id(menu_index) == 0;' }, then: [ lvgl.label.update: { id: main_menu_center, text: "Music" }, lvgl.label.update: { id: main_menu_dots, text: "•  ·  ·  ·  ·" }, lvgl.widget.update: { id: mm_g1, x: 0, y: -15 }, lvgl.widget.update: { id: mm_g2, x: 0, y: -22 }, lvgl.widget.update: { id: mm_g3, x: 0, y: -30 } ] }
+      - if: { condition: { lambda: 'return id(menu_index) == 1;' }, then: [ lvgl.label.update: { id: main_menu_center, text: "TV" }, lvgl.label.update: { id: main_menu_dots, text: "·  •  ·  ·  ·" }, lvgl.widget.update: { id: mm_g1, x: 15, y: 0 }, lvgl.widget.update: { id: mm_g2, x: 22, y: 0 }, lvgl.widget.update: { id: mm_g3, x: 30, y: 0 } ] }
+      - if: { condition: { lambda: 'return id(menu_index) == 2;' }, then: [ lvgl.label.update: { id: main_menu_center, text: "Light" }, lvgl.label.update: { id: main_menu_dots, text: "·  ·  •  ·  ·" }, lvgl.widget.update: { id: mm_g1, x: 0, y: 15 }, lvgl.widget.update: { id: mm_g2, x: 0, y: 22 }, lvgl.widget.update: { id: mm_g3, x: 0, y: 30 } ] }
+      - if: { condition: { lambda: 'return id(menu_index) == 3;' }, then: [ lvgl.label.update: { id: main_menu_center, text: "Thermostat" }, lvgl.label.update: { id: main_menu_dots, text: "·  ·  ·  •  ·" }, lvgl.widget.update: { id: mm_g1, x: -15, y: 0 }, lvgl.widget.update: { id: mm_g2, x: -22, y: 0 }, lvgl.widget.update: { id: mm_g3, x: -30, y: 0 } ] }
+      - if: { condition: { lambda: 'return id(menu_index) == 4;' }, then: [ lvgl.label.update: { id: main_menu_center, text: "Chill" }, lvgl.label.update: { id: main_menu_dots, text: "·  ·  ·  ·  •" }, lvgl.widget.update: { id: mm_g1, x: -11, y: -11 }, lvgl.widget.update: { id: mm_g2, x: -16, y: -16 }, lvgl.widget.update: { id: mm_g3, x: -21, y: -21 } ] }
+
+  - id: cycle_thermostat_mode
+    then:
+      - lambda: |-
+          std::string mode = id(ha_thermostat_mode).state;
+          std::string next;
+          if (mode == "off") next = "heat";
+          else if (mode == "heat") next = "cool";
+          else if (mode == "cool") next = "heat_cool";
+          else if (mode == "heat_cool") next = "off";
+          else next = "heat";
+          id(ha_thermostat_mode).publish_state(next);
+      - homeassistant.service:
+          service: climate.set_hvac_mode
+          data: { entity_id: climate.living_room_thermostat }
+          data_template:
+            hvac_mode: !lambda 'return id(ha_thermostat_mode).state;'
+
+# ================= FONTS =================
+font:
+  - file: "gfonts://Montserrat@300"
+    id: montserrat_light_18
+    size: 18
+    bpp: 4
+    glyphs: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz !%&'()*+,-./:;<=>?@[]^_{|}~°▶◀■•·"
+  - file: "gfonts://Montserrat@400"
+    id: montserrat_regular_20
+    size: 20
+    bpp: 4
+    glyphs: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz !%&'()*+,-./:;<=>?@[]^_{|}~°▶◀■•·"
+  - file: "gfonts://Montserrat@500"
+    id: montserrat_medium_22
+    size: 22
+    bpp: 4
+    glyphs: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz !%&'()*+,-./:;<=>?@[]^_{|}~°▶◀■•·"
+  - file: "gfonts://Montserrat@600"
+    id: montserrat_semibold_24
+    size: 24
+    bpp: 4
+    glyphs: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz !%&'()*+,-./:;<=>?@[]^_{|}~°▶◀■•·"
+  - file: "gfonts://Montserrat@600"
+    id: montserrat_semibold_44
+    size: 44
+    bpp: 4
+    glyphs: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz !%&'()*+,-./:;<=>?@[]^_{|}~°▶◀■•·"
+  - file: "gfonts://Montserrat@200"
+    id: montserrat_extralight_96
+    size: 96
+    bpp: 4
+    glyphs: "0123456789%:° AMP"
+  - file: "gfonts://Montserrat@200"
+    id: montserrat_extralight_120
+    size: 120
+    bpp: 4
+    glyphs: "0123456789%:° AMP"
+  - file: "gfonts://Montserrat@300"
+    id: montserrat_light_88
+    size: 88
+    bpp: 4
+    glyphs: "0123456789%:° AMP"
+
+# ================= LVGL =================
+lvgl:
+  displays:
+    - rgb_panel
+  touchscreens:
+    - my_touchscreen
+  default_font: montserrat_regular_20
+  disp_bg_color: 0x000000
+  bg_color: 0x000000
+  scroll_on_focus: false
+  page_wrap: false
+
+  theme:
+    button:
+      radius: 24
+      border_width: 0
+      bg_color: 0x1C1C1E
+      bg_grad_color: 0x1C1C1E
+      shadow_width: 0
+    slider:
+      bg_color: 0x2C2C2E
+      bg_grad_color: 0x2C2C2E
+      border_width: 0
+      radius: 8
+      indicator:
+        bg_color: 0x8AB4F8
+        bg_grad_color: 0x8AB4F8
+        bg_grad_dir: HOR
+        radius: 8
+
+  pages:
+    # ========== SCREENSAVER (CLOCK) ==========
+    - id: clock_page
+      skip: true
+      scrollable: false
+      bg_color: 0x000000
+      on_load:
+        - lambda: 'id(current_page) = 7;'
+        - lvgl.label.update:
+            id: clock_label
+            text: !lambda |-
+              auto time = id(ha_time).now();
+              if (time.is_valid()) { return time.strftime("%I:%M"); }
+              return std::string("--:--");
+        - lvgl.label.update:
+            id: clock_ampm
+            text: !lambda |-
+              auto time = id(ha_time).now();
+              if (time.is_valid()) { return time.strftime("%p"); }
+              return std::string("");
+        - lvgl.label.update:
+            id: date_label
+            text: !lambda |-
+              auto time = id(ha_time).now();
+              if (time.is_valid()) { return time.strftime("%A, %B %d"); }
+              return std::string("");
+        - script.execute: update_clock_status
+      widgets:
+        - button: { align: CENTER, width: 470, height: 470, radius: 235, clickable: false, bg_color: 0x090603, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 420, height: 420, radius: 210, clickable: false, bg_color: 0x120C05, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 360, height: 360, radius: 180, clickable: false, bg_color: 0x1C1308, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 300, height: 300, radius: 150, clickable: false, bg_color: 0x261A0A, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 240, height: 240, radius: 120, clickable: false, bg_color: 0x30220E, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 170, height: 170, radius: 85, clickable: false, bg_color: 0x3D2B10, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 100, height: 100, radius: 50, clickable: false, bg_color: 0x4A3414, border_width: 0, shadow_width: 0 }
+        - label: { id: clock_label, text: "--:--", align: CENTER, x: 0, y: -35, text_font: montserrat_extralight_120, text_color: 0xE8EAED }
+        - label: { id: clock_ampm, text: "", align: CENTER, x: 0, y: 45, text_font: montserrat_semibold_24, text_color: 0x8E8E93 }
+        - label: { id: date_label, text: "", align: CENTER, x: 0, y: 82, text_font: montserrat_medium_22, text_color: 0x636366 }
+        - label: { id: clock_status_label, text: "", align: CENTER, x: 0, y: 118, text_font: montserrat_light_18, text_color: 0x636366 }
+        - label: { id: clock_sleep_label, text: "", align: CENTER, x: 0, y: 150, text_font: montserrat_light_18, text_color: 0xBB86FC }
+
+    # ========== CONNECTING ==========
+    - id: connecting_page
+      skip: false
+      scrollable: false
+      bg_color: 0x000000
+      on_load:
+        - lambda: 'id(current_page) = -1;'
+      widgets:
+        - button: { align: CENTER, width: 450, height: 450, radius: 225, clickable: false, bg_color: 0x040608, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 380, height: 380, radius: 190, clickable: false, bg_color: 0x080C12, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 300, height: 300, radius: 150, clickable: false, bg_color: 0x0C121C, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 220, height: 220, radius: 110, clickable: false, bg_color: 0x101826, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 140, height: 140, radius: 70, clickable: false, bg_color: 0x141E30, border_width: 0, shadow_width: 0 }
+        - label: { text: "Connecting", align: CENTER, x: 0, y: -15, text_font: montserrat_semibold_24, text_color: 0xE8EAED }
+        - label: { text: "Home Assistant", align: CENTER, x: 0, y: 18, text_font: montserrat_light_18, text_color: 0x8E8E93 }
+        - spinner:
+            align: CENTER
+            y: 80
+            width: 54
+            height: 54
+            spin_time: 1.2s
+            arc_length: 70deg
+            arc_width: 6
+            arc_color: 0x141E30
+            indicator:
+              arc_color: 0x8AB4F8
+              arc_width: 6
+
+    # ========== MAIN MENU ==========
+    - id: main_menu_page
+      skip: false
+      scrollable: false
+      bg_color: 0x000000
+      on_load:
+        - lambda: 'id(current_page) = 0; id(menu_index) = 0;'
+        - script.execute: update_menu_ui
+      widgets:
+        - button: { align: CENTER, width: 470, height: 470, radius: 235, clickable: false, bg_color: 0x030609, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 420, height: 420, radius: 210, clickable: false, bg_color: 0x060D14, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 360, height: 360, radius: 180, clickable: false, bg_color: 0x0A1520, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 300, height: 300, radius: 150, clickable: false, bg_color: 0x0E1D2E, border_width: 0, shadow_width: 0 }
+        - button: { id: mm_g1, align: CENTER, width: 240, height: 240, radius: 120, clickable: false, bg_color: 0x12253C, border_width: 0, shadow_width: 0 }
+        - button: { id: mm_g2, align: CENTER, width: 170, height: 170, radius: 85, clickable: false, bg_color: 0x16304E, border_width: 0, shadow_width: 0 }
+        - button: { id: mm_g3, align: CENTER, width: 100, height: 100, radius: 50, clickable: false, bg_color: 0x1A3B60, border_width: 0, shadow_width: 0 }
+        - label: { id: main_menu_top, text: "Home", align: CENTER, x: 0, y: -90, text_font: montserrat_regular_20, text_color: 0x8E8E93 }
+        - label: { id: main_menu_center, text: "Music", align: CENTER, x: 0, y: -15, text_font: montserrat_semibold_44, text_color: 0xE8EAED }
+        - label: { id: main_menu_dots, text: "•  ·  ·  ·  ·", align: CENTER, x: 0, y: 40, text_font: montserrat_light_18, text_color: 0x8E8E93 }
+        - label: { id: main_menu_hint, text: "Press: select   Hold: lights", align: CENTER, x: 0, y: 100, text_font: montserrat_regular_20, text_color: 0x9E9EA4 }
+
+    # ========== LIGHTS MENU ==========
+    - id: lights_menu_page
+      skip: true
+      scrollable: false
+      bg_color: 0x000000
+      on_swipe_right:
+        - lvgl.page.show: { id: main_menu_page, animation: OVER_RIGHT, time: 240ms }
+      on_load:
+        - lambda: 'id(current_page) = 1; id(lights_menu_index) = 0;'
+        - script.execute: update_lights_menu_ui
+      widgets:
+        - button: { align: CENTER, width: 470, height: 470, radius: 235, clickable: false, bg_color: 0x090502, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 420, height: 420, radius: 210, clickable: false, bg_color: 0x130B04, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 360, height: 360, radius: 180, clickable: false, bg_color: 0x1E1208, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 300, height: 300, radius: 150, clickable: false, bg_color: 0x2A1A0C, border_width: 0, shadow_width: 0 }
+        - button: { id: lm_g1, align: CENTER, width: 240, height: 240, radius: 120, clickable: false, bg_color: 0x362210, border_width: 0, shadow_width: 0 }
+        - button: { id: lm_g2, align: CENTER, width: 170, height: 170, radius: 85, clickable: false, bg_color: 0x422B14, border_width: 0, shadow_width: 0 }
+        - button: { id: lm_g3, align: CENTER, width: 100, height: 100, radius: 50, clickable: false, bg_color: 0x4E3418, border_width: 0, shadow_width: 0 }
+        - label: { text: "Lights", align: CENTER, x: 0, y: -90, text_font: montserrat_regular_20, text_color: 0xF4A535 }
+        - label: { id: lights_menu_center, text: "Overhead", align: CENTER, x: 0, y: -15, text_font: montserrat_semibold_44, text_color: 0xE8EAED }
+        - label: { id: lights_menu_dots, text: "•  ·  ·  ·  ·  ·  ·", align: CENTER, x: 0, y: 40, text_font: montserrat_light_18, text_color: 0x8E8E93 }
+        - label: { id: lights_menu_hint, text: "Press to select", align: CENTER, x: 0, y: 100, text_font: montserrat_regular_20, text_color: 0x9E9EA4 }
+
+    # ========== SPOTLIGHTS ==========
+    - id: spotlights_page
+      skip: true
+      scrollable: false
+      bg_color: 0x000000
+      on_swipe_right:
+        - lvgl.page.show: { id: lights_menu_page, animation: OVER_RIGHT, time: 240ms }
+      on_load:
+        - lambda: 'id(current_page) = 8; id(spotlights_menu_index) = 0;'
+        - script.execute: update_spotlights_menu_ui
+      widgets:
+        - button: { align: CENTER, width: 470, height: 470, radius: 235, clickable: false, bg_color: 0x020807, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 420, height: 420, radius: 210, clickable: false, bg_color: 0x04110F, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 360, height: 360, radius: 180, clickable: false, bg_color: 0x081B18, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 300, height: 300, radius: 150, clickable: false, bg_color: 0x0C2622, border_width: 0, shadow_width: 0 }
+        - button: { id: sp_g1, align: CENTER, width: 240, height: 240, radius: 120, clickable: false, bg_color: 0x10322D, border_width: 0, shadow_width: 0 }
+        - button: { id: sp_g2, align: CENTER, width: 170, height: 170, radius: 85, clickable: false, bg_color: 0x143E38, border_width: 0, shadow_width: 0 }
+        - button: { id: sp_g3, align: CENTER, width: 100, height: 100, radius: 50, clickable: false, bg_color: 0x184A44, border_width: 0, shadow_width: 0 }
+        - label: { text: "Spotlights", align: CENTER, x: 0, y: -90, text_font: montserrat_regular_20, text_color: 0x5DE6CC }
+        - label: { id: active_spotlight_name, text: "Blue", align: CENTER, x: 0, y: -15, text_font: montserrat_semibold_44, text_color: 0xE8EAED }
+        - label: { id: spotlight_dots, text: "1 of 11", align: CENTER, x: 0, y: 40, text_font: montserrat_light_18, text_color: 0x8E8E93 }
+        - label: { id: spotlights_action_label, text: "Press to activate", align: CENTER, x: 0, y: 95, text_font: montserrat_regular_20, text_color: 0x9E9EA4 }
+        - button:
+            id: spotlights_back_touch
+            align: CENTER
+            x: 0
+            y: 160
+            width: 140
+            height: 50
+            radius: 25
+            clickable: true
+            bg_color: 0x1C1C1E
+            on_press:
+              - lvgl.page.show: { id: lights_menu_page, animation: OVER_LEFT, time: 240ms }
+            widgets:
+              - label: { text: "Back", align: CENTER, text_font: montserrat_medium_22, text_color: 0x5DE6CC }
+
+    # ========== TV MENU ==========
+    - id: tv_menu_page
+      skip: true
+      scrollable: false
+      bg_color: 0x000000
+      on_swipe_right:
+        - lvgl.page.show: { id: main_menu_page, animation: OVER_RIGHT, time: 240ms }
+      on_load:
+        - lambda: 'id(current_page) = 6; id(tv_menu_index) = 0;'
+        - script.execute: update_tv_menu_ui
+      widgets:
+        - button: { align: CENTER, width: 470, height: 470, radius: 235, clickable: false, bg_color: 0x020804, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 420, height: 420, radius: 210, clickable: false, bg_color: 0x05120A, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 360, height: 360, radius: 180, clickable: false, bg_color: 0x091C10, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 300, height: 300, radius: 150, clickable: false, bg_color: 0x0E2818, border_width: 0, shadow_width: 0 }
+        - button: { id: tv_g1, align: CENTER, width: 240, height: 240, radius: 120, clickable: false, bg_color: 0x133420, border_width: 0, shadow_width: 0 }
+        - button: { id: tv_g2, align: CENTER, width: 170, height: 170, radius: 85, clickable: false, bg_color: 0x184028, border_width: 0, shadow_width: 0 }
+        - button: { id: tv_g3, align: CENTER, width: 100, height: 100, radius: 50, clickable: false, bg_color: 0x1E4C30, border_width: 0, shadow_width: 0 }
+        - label: { text: "TV Control", align: CENTER, x: 0, y: -90, text_font: montserrat_regular_20, text_color: 0x81C995 }
+        - label: { id: tv_menu_center, text: "Now Playing", align: CENTER, x: 0, y: -15, text_font: montserrat_semibold_44, text_color: 0xE8EAED }
+        - label: { id: tv_menu_dots, text: "•  ·  ·  ·  ·  ·  ·  ·", align: CENTER, x: 0, y: 40, text_font: montserrat_light_18, text_color: 0x8E8E93 }
+        - label: { text: "Press to select", align: CENTER, x: 0, y: 100, text_font: montserrat_regular_20, text_color: 0x9E9EA4 }
+
+    # ========== TV VOLUME ==========
+    - id: tv_volume_page
+      skip: true
+      scrollable: false
+      bg_color: 0x000000
+      on_swipe_right:
+        - lvgl.page.show: { id: tv_menu_page, animation: OVER_RIGHT, time: 240ms }
+      on_load:
+        - lambda: 'id(current_page) = 9; id(tv_vol_steps) = 0; id(tv_vol_fire) = false;'
+      widgets:
+        - button: { align: CENTER, width: 470, height: 470, radius: 235, clickable: false, bg_color: 0x020804, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 420, height: 420, radius: 210, clickable: false, bg_color: 0x05120A, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 360, height: 360, radius: 180, clickable: false, bg_color: 0x091C10, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 300, height: 300, radius: 150, clickable: false, bg_color: 0x0E2818, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 240, height: 240, radius: 120, clickable: false, bg_color: 0x133420, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 170, height: 170, radius: 85, clickable: false, bg_color: 0x184028, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 100, height: 100, radius: 50, clickable: false, bg_color: 0x1E4C30, border_width: 0, shadow_width: 0 }
+        - label: { text: "TV Volume", align: CENTER, x: 0, y: -120, text_font: montserrat_regular_20, text_color: 0x81C995 }
+        - label: { id: tv_vol_direction, text: "Spin to adjust", align: CENTER, x: 0, y: -20, text_font: montserrat_semibold_24, text_color: 0xE8EAED }
+        - label: { text: "1 click per volume step", align: CENTER, x: 0, y: 30, text_font: montserrat_regular_20, text_color: 0x8E8E93 }
+        - button:
+            id: tv_vol_back_btn
+            align: CENTER
+            x: -75
+            y: 160
+            width: 130
+            height: 50
+            radius: 25
+            clickable: true
+            bg_color: 0x1C1C1E
+            on_press:
+              - lvgl.page.show: { id: tv_menu_page, animation: OVER_LEFT, time: 240ms }
+            widgets:
+              - label: { text: "Back", align: CENTER, text_font: montserrat_medium_22, text_color: 0x81C995 }
+        - button:
+            id: tv_vol_mute_btn
+            align: CENTER
+            x: 75
+            y: 160
+            width: 130
+            height: 50
+            radius: 25
+            clickable: true
+            bg_color: 0x1C1C1E
+            on_press:
+              - homeassistant.service:
+                  service: button.press
+                  data: { entity_id: button.lnlinkha_4101599dbeac000084c6e0df0d94_9 }
+              - lvgl.label.update: { id: tv_vol_direction, text: "MUTE" }
+              - script.execute: tv_vol_hint_reset
+            widgets:
+              - label: { text: "Mute", align: CENTER, text_font: montserrat_medium_22, text_color: 0x81C995 }
+
+    # ========== TV NOW PLAYING ==========
+    - id: tv_now_playing_page
+      skip: true
+      scrollable: false
+      bg_color: 0x000000
+      on_swipe_right:
+        - lvgl.page.show: { id: tv_menu_page, animation: OVER_RIGHT, time: 240ms }
+      on_swipe_left:
+        - lvgl.page.show: { id: tv_volume_page, animation: OVER_LEFT, time: 240ms }
+      on_load:
+        - lambda: 'id(current_page) = 10; id(tv_seek_last_ms) = 0; id(tv_seek_multiplier) = 1;'
+        - script.execute: tv_art_refresh
+        - lvgl.label.update: { id: tv_now_title, text: !lambda 'return id(ha_tv_media_title).state.c_str();' }
+        - lvgl.label.update: { id: tv_now_app, text: !lambda 'return id(ha_tv_app_name).state.c_str();' }
+        - lvgl.label.update:
+            id: tv_now_state_label
+            text: !lambda |-
+              static char buf[16];
+              std::string s = id(ha_tv_state).state;
+              if (s == "playing") snprintf(buf, sizeof(buf), "Playing");
+              else if (s == "paused") snprintf(buf, sizeof(buf), "Paused");
+              else if (s == "idle") snprintf(buf, sizeof(buf), "Idle");
+              else snprintf(buf, sizeof(buf), "%s", s.c_str());
+              return buf;
+      widgets:
+        - button: { align: CENTER, width: 470, height: 470, radius: 235, clickable: false, bg_color: 0x020804, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 420, height: 420, radius: 210, clickable: false, bg_color: 0x05120A, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 360, height: 360, radius: 180, clickable: false, bg_color: 0x091C10, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 300, height: 300, radius: 150, clickable: false, bg_color: 0x0E2818, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 240, height: 240, radius: 120, clickable: false, bg_color: 0x133420, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 170, height: 170, radius: 85, clickable: false, bg_color: 0x184028, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 100, height: 100, radius: 50, clickable: false, bg_color: 0x1E4C30, border_width: 0, shadow_width: 0 }
+        - image:
+            id: tv_art_img
+            src: tv_art
+            align: CENTER
+            x: 0
+            y: 0
+            hidden: true
+        - button: { align: CENTER, x: 0, y: -190, width: 480, height: 120, radius: 0, clickable: false, bg_color: 0x000000, bg_opa: 55%, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, x: 0, y: 160, width: 480, height: 200, radius: 0, clickable: false, bg_color: 0x000000, bg_opa: 60%, border_width: 0, shadow_width: 0 }
+        - label: { text: "Now Playing", align: CENTER, x: 0, y: -172, text_font: montserrat_regular_20, text_color: 0x81C995 }
+        - label: { id: tv_seek_hint, text: "Spin: seek  |  Press: play/pause", align: CENTER, x: 0, y: -144, text_font: montserrat_regular_20, text_color: 0xFFFFFF }
+        - label:
+            id: tv_now_title
+            align: CENTER
+            x: 0
+            y: 78
+            width: 380
+            text: "--"
+            text_align: CENTER
+            text_font: montserrat_semibold_24
+            text_color: 0xFFFFFF
+            long_mode: SCROLL_CIRCULAR
+        - label:
+            id: tv_now_app
+            align: CENTER
+            x: 0
+            y: 108
+            width: 340
+            text: "--"
+            text_align: CENTER
+            text_font: montserrat_regular_20
+            text_color: 0xD8D8DC
+            long_mode: SCROLL_CIRCULAR
+        - label:
+            id: tv_now_state_label
+            align: CENTER
+            x: 0
+            y: 135
+            text: "--"
+            text_font: montserrat_regular_20
+            text_color: 0x81C995
+        - button:
+            id: tv_now_back_btn
+            align: CENTER
+            x: -75
+            y: 168
+            width: 130
+            height: 50
+            radius: 25
+            clickable: true
+            bg_color: 0x1C1C1E
+            on_press:
+              - lvgl.page.show: { id: tv_menu_page, animation: OVER_LEFT, time: 240ms }
+            widgets:
+              - label: { text: "Back", align: CENTER, text_font: montserrat_medium_22, text_color: 0x81C995 }
+        - button:
+            id: tv_now_vol_btn
+            align: CENTER
+            x: 75
+            y: 168
+            width: 130
+            height: 50
+            radius: 25
+            clickable: true
+            bg_color: 0x1C1C1E
+            on_press:
+              - lvgl.page.show: { id: tv_volume_page, animation: OVER_LEFT, time: 240ms }
+            widgets:
+              - label: { text: "Vol", align: CENTER, text_font: montserrat_medium_22, text_color: 0x81C995 }
+
+    # ========== SCENES ==========
+    - id: scenes_page
+      skip: true
+      scrollable: false
+      bg_color: 0x000000
+      on_swipe_right:
+        - lvgl.page.show: { id: lights_menu_page, animation: OVER_RIGHT, time: 240ms }
+      on_load:
+        - lambda: 'id(current_page) = 4; id(scene_ui_index) = 0;'
+        - script.execute: update_scene_ui
+      widgets:
+        - button: { align: CENTER, width: 470, height: 470, radius: 235, clickable: false, bg_color: 0x080206, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 420, height: 420, radius: 210, clickable: false, bg_color: 0x12040D, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 360, height: 360, radius: 180, clickable: false, bg_color: 0x1C0815, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 300, height: 300, radius: 150, clickable: false, bg_color: 0x280C1E, border_width: 0, shadow_width: 0 }
+        - button: { id: sc_g1, align: CENTER, width: 240, height: 240, radius: 120, clickable: false, bg_color: 0x341028, border_width: 0, shadow_width: 0 }
+        - button: { id: sc_g2, align: CENTER, width: 170, height: 170, radius: 85, clickable: false, bg_color: 0x401432, border_width: 0, shadow_width: 0 }
+        - button: { id: sc_g3, align: CENTER, width: 100, height: 100, radius: 50, clickable: false, bg_color: 0x4C183C, border_width: 0, shadow_width: 0 }
+        - label: { text: "Scenes", align: CENTER, x: 0, y: -90, text_font: montserrat_regular_20, text_color: 0xF48FB1 }
+        - label: { id: active_scene_name, text: "Relaxing Night 2", align: CENTER, x: 0, y: -15, text_font: montserrat_semibold_44, text_color: 0xE8EAED }
+        - label: { id: scene_dots, text: "•  ·  ·  ·  ·", align: CENTER, x: 0, y: 40, text_font: montserrat_light_18, text_color: 0x8E8E93 }
+        - label: { id: scene_action_label, text: "Press to set", align: CENTER, x: 0, y: 95, text_font: montserrat_regular_20, text_color: 0x9E9EA4 }
+        - button:
+            id: scenes_back_touch
+            align: CENTER
+            x: 0
+            y: 160
+            width: 140
+            height: 50
+            radius: 25
+            clickable: true
+            bg_color: 0x1C1C1E
+            on_press:
+              - lvgl.page.show: { id: lights_menu_page, animation: OVER_LEFT, time: 240ms }
+            widgets:
+              - label: { text: "Back", align: CENTER, text_font: montserrat_medium_22, text_color: 0xF48FB1 }
+
+    # ========== BRIGHTNESS ==========
+    - id: brightness_page
+      skip: true
+      scrollable: false
+      bg_color: 0x000000
+      on_swipe_right:
+        - lvgl.page.show: { id: lights_menu_page, animation: OVER_RIGHT, time: 240ms }
+      on_load:
+        - lambda: 'id(current_page) = 5;'
+        - lvgl.label.update:
+            id: brightness_value_label
+            text: !lambda |-
+              static char buf[16];
+              snprintf(buf, sizeof(buf), "%d%%", id(brightness_value));
+              return buf;
+        - lvgl.arc.update:
+            id: brightness_arc
+            value: !lambda 'return id(brightness_value);'
+      widgets:
+        - button: { align: CENTER, width: 470, height: 470, radius: 235, clickable: false, bg_color: 0x090502, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 420, height: 420, radius: 210, clickable: false, bg_color: 0x130B04, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 360, height: 360, radius: 180, clickable: false, bg_color: 0x1E1208, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 300, height: 300, radius: 150, clickable: false, bg_color: 0x2A1A0C, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 240, height: 240, radius: 120, clickable: false, bg_color: 0x362210, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 170, height: 170, radius: 85, clickable: false, bg_color: 0x422B14, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 100, height: 100, radius: 50, clickable: false, bg_color: 0x4E3418, border_width: 0, shadow_width: 0 }
+        - label: { text: "Overhead", align: CENTER, x: 0, y: -120, text_font: montserrat_regular_20, text_color: 0xF4A535 }
+        - label: { id: brightness_value_label, text: "0%", align: CENTER, x: 0, y: -5, text_font: montserrat_light_88, text_color: 0xE8EAED }
+        - arc:
+            id: brightness_arc
+            align: CENTER
+            x: 0
+            y: -5
+            width: 300
+            height: 300
+            min_value: 0
+            max_value: 100
+            value: 0
+            arc_width: 14
+            start_angle: 135
+            end_angle: 45
+            adjustable: false
+            arc_color: 0x3A2A14
+            indicator:
+              arc_color: 0xF4A535
+              arc_width: 14
+        - label: { text: "Press dial to toggle", align: CENTER, x: 0, y: 100, text_font: montserrat_regular_20, text_color: 0x9E9EA4 }
+        - button:
+            id: brightness_back_btn
+            align: CENTER
+            x: 0
+            y: 160
+            width: 140
+            height: 50
+            radius: 25
+            clickable: true
+            bg_color: 0x1C1C1E
+            on_press:
+              - lvgl.page.show: { id: lights_menu_page, animation: OVER_LEFT, time: 240ms }
+            widgets:
+              - label: { text: "Back", align: CENTER, text_font: montserrat_medium_22, text_color: 0xF4A535 }
+
+    # ========== ACCENT LIGHTS ==========
+    - id: accent_page
+      skip: true
+      scrollable: false
+      bg_color: 0x000000
+      on_swipe_right:
+        - lvgl.page.show: { id: lights_menu_page, animation: OVER_RIGHT, time: 240ms }
+      on_load:
+        - lambda: 'id(current_page) = 14;'
+        - lvgl.label.update:
+            id: accent_value_label
+            text: !lambda |-
+              static char buf[16];
+              snprintf(buf, sizeof(buf), "%d%%", id(accent_brightness_value));
+              return buf;
+        - lvgl.arc.update:
+            id: accent_arc
+            value: !lambda 'return id(accent_brightness_value);'
+      widgets:
+        - button: { align: CENTER, width: 470, height: 470, radius: 235, clickable: false, bg_color: 0x090502, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 420, height: 420, radius: 210, clickable: false, bg_color: 0x130B04, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 360, height: 360, radius: 180, clickable: false, bg_color: 0x1E1208, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 300, height: 300, radius: 150, clickable: false, bg_color: 0x2A1A0C, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 240, height: 240, radius: 120, clickable: false, bg_color: 0x362210, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 170, height: 170, radius: 85, clickable: false, bg_color: 0x422B14, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 100, height: 100, radius: 50, clickable: false, bg_color: 0x4E3418, border_width: 0, shadow_width: 0 }
+        - label: { text: "Accent Lights", align: CENTER, x: 0, y: -120, text_font: montserrat_regular_20, text_color: 0xF4A535 }
+        - label: { id: accent_value_label, text: "50%", align: CENTER, x: 0, y: -5, text_font: montserrat_light_88, text_color: 0xE8EAED }
+        - arc:
+            id: accent_arc
+            align: CENTER
+            x: 0
+            y: -5
+            width: 300
+            height: 300
+            min_value: 0
+            max_value: 100
+            value: 50
+            arc_width: 14
+            start_angle: 135
+            end_angle: 45
+            adjustable: false
+            arc_color: 0x3A2A14
+            indicator:
+              arc_color: 0xF4A535
+              arc_width: 14
+        - label: { text: "Press dial to toggle", align: CENTER, x: 0, y: 100, text_font: montserrat_regular_20, text_color: 0x9E9EA4 }
+        - button:
+            id: accent_back_btn
+            align: CENTER
+            x: 0
+            y: 160
+            width: 140
+            height: 50
+            radius: 25
+            clickable: true
+            bg_color: 0x1C1C1E
+            on_press:
+              - lvgl.page.show: { id: lights_menu_page, animation: OVER_LEFT, time: 240ms }
+            widgets:
+              - label: { text: "Back", align: CENTER, text_font: montserrat_medium_22, text_color: 0xF4A535 }
+
+    # ========== MUSIC CONTROLS ==========
+    - id: music_page
+      skip: true
+      scrollable: false
+      bg_color: 0x000000
+      on_swipe_right:
+        - lvgl.page.show: { id: music_now_playing_page, animation: OVER_RIGHT, time: 240ms }
+      on_load:
+        - lambda: |-
+            id(current_page) = 2;
+            uint32_t now = millis();
+            bool recent_knob = id(knob_vol_ms) != 0 &&
+                               (uint32_t)(now - id(knob_vol_ms)) < 30000UL;
+            if (!recent_knob && id(ha_vol_raw) >= 0) {
+              id(volume_value) = id(ha_vol_raw);
+            }
+        - lvgl.label.update:
+            id: volume_display
+            text: !lambda |-
+              static char buf[8];
+              snprintf(buf, sizeof(buf), "%d%%", id(volume_value));
+              return buf;
+        - lvgl.arc.update:
+            id: volume_arc
+            value: !lambda 'return id(volume_value);'
+      widgets:
+        - button: { align: CENTER, width: 470, height: 470, radius: 235, clickable: false, bg_color: 0x060209, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 420, height: 420, radius: 210, clickable: false, bg_color: 0x0D0514, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 360, height: 360, radius: 180, clickable: false, bg_color: 0x150820, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 300, height: 300, radius: 150, clickable: false, bg_color: 0x1E0C2E, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 240, height: 240, radius: 120, clickable: false, bg_color: 0x28103C, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 170, height: 170, radius: 85, clickable: false, bg_color: 0x32144E, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 100, height: 100, radius: 50, clickable: false, bg_color: 0x3C1860, border_width: 0, shadow_width: 0 }
+        - label: { text: "Volume", align: CENTER, x: 0, y: -85, text_font: montserrat_regular_20, text_color: 0xBB86FC }
+        - label:
+            id: volume_display
+            text: "--%"
+            align: CENTER
+            x: 0
+            y: -10
+            width: 340
+            text_align: CENTER
+            text_font: montserrat_extralight_96
+            text_color: 0xE8EAED
+        - arc:
+            id: volume_arc
+            align: CENTER
+            x: 0
+            y: 0
+            width: 340
+            height: 340
+            min_value: 0
+            max_value: 100
+            value: 50
+            arc_width: 12
+            start_angle: 135
+            end_angle: 45
+            adjustable: false
+            arc_color: 0x32144E
+            indicator:
+              arc_color: 0xBB86FC
+              arc_width: 12
+        - button:
+            id: play_music_btn
+            align: CENTER
+            x: 0
+            y: 80
+            width: 72
+            height: 56
+            radius: 28
+            clickable: true
+            bg_color: 0x1C1C1E
+            border_width: 1
+            border_color: 0x3C1860
+            on_press:
+              - homeassistant.service:
+                  service: media_player.media_play_pause
+                  data: { entity_id: media_player.living_room_speakers_2 }
+            widgets:
+              - label: { id: music_play_icon, text: "▶", align: CENTER, text_font: montserrat_semibold_24, text_color: 0xBB86FC }
+        - button:
+            id: prev_song_btn
+            align: CENTER
+            x: -90
+            y: 80
+            width: 72
+            height: 56
+            radius: 28
+            clickable: true
+            bg_color: 0x1C1C1E
+            border_width: 1
+            border_color: 0x3C1860
+            on_press:
+              - homeassistant.service:
+                  service: media_player.media_previous_track
+                  data: { entity_id: media_player.living_room_speakers_2 }
+            widgets:
+              - label: { text: "|◀", align: CENTER, text_font: montserrat_semibold_24, text_color: 0xBB86FC }
+        - button:
+            id: next_song_btn
+            align: CENTER
+            x: 90
+            y: 80
+            width: 72
+            height: 56
+            radius: 28
+            clickable: true
+            bg_color: 0x1C1C1E
+            border_width: 1
+            border_color: 0x3C1860
+            on_press:
+              - homeassistant.service:
+                  service: media_player.media_next_track
+                  data: { entity_id: media_player.living_room_speakers_2 }
+            widgets:
+              - label: { text: "▶|", align: CENTER, text_font: montserrat_semibold_24, text_color: 0xBB86FC }
+        - label: { text: "Spin dial to adjust", align: CENTER, x: 0, y: 130, text_font: montserrat_regular_20, text_color: 0x9E9EA4 }
+        - button:
+            id: music_back_btn
+            align: CENTER
+            x: -75
+            y: 175
+            width: 130
+            height: 50
+            radius: 25
+            clickable: true
+            bg_color: 0x1C1C1E
+            border_width: 1
+            border_color: 0x3C1860
+            on_press:
+              - lvgl.page.show: { id: music_now_playing_page, animation: OVER_LEFT, time: 240ms }
+            widgets:
+              - label: { text: "Back", align: CENTER, text_font: montserrat_medium_22, text_color: 0xBB86FC }
+        - button:
+            id: music_playlists_btn
+            align: CENTER
+            x: 75
+            y: 175
+            width: 130
+            height: 50
+            radius: 25
+            clickable: true
+            bg_color: 0x1C1C1E
+            border_width: 1
+            border_color: 0x3C1860
+            on_press:
+              - lvgl.page.show: { id: playlists_page, animation: OVER_LEFT, time: 240ms }
+            widgets:
+              - label: { text: "Lists", align: CENTER, text_font: montserrat_medium_22, text_color: 0xBB86FC }
+
+    # ========== MUSIC NOW PLAYING ==========
+    - id: music_now_playing_page
+      skip: true
+      scrollable: false
+      bg_color: 0x000000
+      on_swipe_right:
+        - lvgl.page.show: { id: main_menu_page, animation: OVER_RIGHT, time: 240ms }
+      on_swipe_left:
+        - homeassistant.service:
+            service: media_player.media_next_track
+            data: { entity_id: media_player.living_room_speakers_2 }
+        - script.execute: music_next_flash
+      on_load:
+        - lambda: |-
+            id(current_page) = 11;
+            uint32_t now = millis();
+            bool recent_knob = id(knob_vol_ms) != 0 &&
+                               (uint32_t)(now - id(knob_vol_ms)) < 30000UL;
+            if (!recent_knob && id(ha_vol_raw) >= 0) {
+              id(volume_value) = id(ha_vol_raw);
+            }
+        - script.execute: music_art_refresh
+        - script.execute: update_lyrics_btn
+        - lvgl.label.update: { id: music_now_title, text: !lambda 'return id(ha_music_title).state.c_str();' }
+        - lvgl.label.update: { id: music_now_artist, text: !lambda 'return id(artist_stale) ? "" : id(ha_music_artist).state.c_str();' }
+        - lvgl.label.update:
+            id: music_now_state_label
+            text: !lambda |-
+              static char buf[16];
+              std::string s = id(ha_music_state).state;
+              if (s == "playing") snprintf(buf, sizeof(buf), "Playing");
+              else if (s == "paused") snprintf(buf, sizeof(buf), "Paused");
+              else if (s == "idle") snprintf(buf, sizeof(buf), "Idle");
+              else snprintf(buf, sizeof(buf), "%s", s.c_str());
+              return buf;
+      widgets:
+        - button: { align: CENTER, width: 470, height: 470, radius: 235, clickable: false, bg_color: 0x060209, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 420, height: 420, radius: 210, clickable: false, bg_color: 0x0D0514, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 360, height: 360, radius: 180, clickable: false, bg_color: 0x150820, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 300, height: 300, radius: 150, clickable: false, bg_color: 0x1E0C2E, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 240, height: 240, radius: 120, clickable: false, bg_color: 0x28103C, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 170, height: 170, radius: 85, clickable: false, bg_color: 0x32144E, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 100, height: 100, radius: 50, clickable: false, bg_color: 0x3C1860, border_width: 0, shadow_width: 0 }
+        - image:
+            id: music_art
+            src: album_art
+            align: CENTER
+            x: 0
+            y: 0
+            hidden: true
+        - button: { align: CENTER, x: 0, y: -205, width: 480, height: 90, radius: 0, clickable: false, bg_color: 0x000000, bg_opa: 55%, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, x: 0, y: 160, width: 480, height: 200, radius: 0, clickable: false, bg_color: 0x000000, bg_opa: 60%, border_width: 0, shadow_width: 0 }
+        - label: { text: "Now Playing", align: CENTER, x: 0, y: -172, text_font: montserrat_regular_20, text_color: 0xBB86FC }
+        - button:
+            id: lyrics_btn
+            align: CENTER
+            x: 0
+            y: -126
+            width: 156
+            height: 46
+            radius: 23
+            clickable: true
+            bg_color: 0x1C1C1E
+            on_press:
+              - homeassistant.service:
+                  service: script.tv_lyrics_toggle
+            widgets:
+              - label: { id: lyrics_btn_label, text: "Lyrics", align: CENTER, text_font: montserrat_medium_22, text_color: 0xBB86FC }
+        - label:
+            id: music_now_title
+            align: CENTER
+            x: 0
+            y: 78
+            width: 380
+            text: "--"
+            text_align: CENTER
+            text_font: montserrat_semibold_24
+            text_color: 0xFFFFFF
+            long_mode: SCROLL_CIRCULAR
+        - label:
+            id: music_now_artist
+            align: CENTER
+            x: 0
+            y: 108
+            width: 340
+            text: "--"
+            text_align: CENTER
+            text_font: montserrat_regular_20
+            text_color: 0xD8D8DC
+            long_mode: SCROLL_CIRCULAR
+        - label:
+            id: music_now_state_label
+            align: CENTER
+            x: 0
+            y: 135
+            text: "--"
+            text_font: montserrat_regular_20
+            text_color: 0xBB86FC
+        - button:
+            id: music_now_back_btn
+            align: CENTER
+            x: -75
+            y: 168
+            width: 130
+            height: 50
+            radius: 25
+            clickable: true
+            bg_color: 0x1C1C1E
+            on_press:
+              - lvgl.page.show: { id: main_menu_page, animation: OVER_LEFT, time: 240ms }
+            widgets:
+              - label: { text: "Back", align: CENTER, text_font: montserrat_medium_22, text_color: 0xBB86FC }
+        - button:
+            id: music_now_vol_btn
+            align: CENTER
+            x: 75
+            y: 168
+            width: 130
+            height: 50
+            radius: 25
+            clickable: true
+            bg_color: 0x1C1C1E
+            on_press:
+              - lvgl.page.show: { id: music_page, animation: OVER_LEFT, time: 240ms }
+            widgets:
+              - label: { text: "More", align: CENTER, text_font: montserrat_medium_22, text_color: 0xBB86FC }
+
+    # ========== PLAYLISTS ==========
+    - id: playlists_page
+      skip: true
+      scrollable: false
+      bg_color: 0x000000
+      on_swipe_right:
+        - lvgl.page.show: { id: music_page, animation: OVER_RIGHT, time: 240ms }
+      on_load:
+        - lambda: 'id(current_page) = 15;'
+        - script.execute: update_playlist_ui
+      widgets:
+        - button: { align: CENTER, width: 470, height: 470, radius: 235, clickable: false, bg_color: 0x060209, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 420, height: 420, radius: 210, clickable: false, bg_color: 0x0D0514, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 360, height: 360, radius: 180, clickable: false, bg_color: 0x150820, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 300, height: 300, radius: 150, clickable: false, bg_color: 0x1E0C2E, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 240, height: 240, radius: 120, clickable: false, bg_color: 0x28103C, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 170, height: 170, radius: 85, clickable: false, bg_color: 0x32144E, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 100, height: 100, radius: 50, clickable: false, bg_color: 0x3C1860, border_width: 0, shadow_width: 0 }
+        - label: { text: "Playlists", align: CENTER, x: 0, y: -110, text_font: montserrat_regular_20, text_color: 0xBB86FC }
+        - label:
+            id: playlist_name_label
+            align: CENTER
+            x: 0
+            y: -25
+            width: 400
+            text: "--"
+            text_align: CENTER
+            text_font: montserrat_semibold_44
+            text_color: 0xE8EAED
+        - label: { id: playlist_counter_label, text: "", align: CENTER, x: 0, y: 60, text_font: montserrat_light_18, text_color: 0x8E8E93 }
+        - label: { id: playlist_action_label, text: "Press to play", align: CENTER, x: 0, y: 100, text_font: montserrat_regular_20, text_color: 0x9E9EA4 }
+        - button:
+            id: playlists_back_btn
+            align: CENTER
+            x: -75
+            y: 160
+            width: 130
+            height: 50
+            radius: 25
+            clickable: true
+            bg_color: 0x1C1C1E
+            border_width: 1
+            border_color: 0x3C1860
+            on_press:
+              - lvgl.page.show: { id: music_page, animation: OVER_LEFT, time: 240ms }
+            widgets:
+              - label: { text: "Back", align: CENTER, text_font: montserrat_medium_22, text_color: 0xBB86FC }
+        - button:
+            id: chill_enter_btn
+            align: CENTER
+            x: 75
+            y: 160
+            width: 130
+            height: 50
+            radius: 25
+            clickable: true
+            bg_color: 0x1C1C1E
+            border_width: 1
+            border_color: 0x0E3B40
+            on_press:
+              - lvgl.page.show: { id: chill_page, animation: OVER_LEFT, time: 240ms }
+            widgets:
+              - label: { text: "Chill", align: CENTER, text_font: montserrat_medium_22, text_color: 0x4DD0E1 }
+
+    # ========== CHILL OUT ==========
+    - id: chill_page
+      skip: true
+      scrollable: false
+      bg_color: 0x000000
+      on_swipe_right:
+        - lvgl.page.show: { id: playlists_page, animation: OVER_RIGHT, time: 240ms }
+      on_load:
+        - lambda: 'id(current_page) = 17;'
+        - script.execute: update_chill_ui
+      widgets:
+        - button: { align: CENTER, width: 470, height: 470, radius: 235, clickable: false, bg_color: 0x020909, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 420, height: 420, radius: 210, clickable: false, bg_color: 0x051413, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 360, height: 360, radius: 180, clickable: false, bg_color: 0x081F1E, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 300, height: 300, radius: 150, clickable: false, bg_color: 0x0C2B2A, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 240, height: 240, radius: 120, clickable: false, bg_color: 0x103736, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 170, height: 170, radius: 85, clickable: false, bg_color: 0x154443, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 100, height: 100, radius: 50, clickable: false, bg_color: 0x1A5150, border_width: 0, shadow_width: 0 }
+        - label: { text: "Chill Out", align: CENTER, x: 0, y: -110, text_font: montserrat_regular_20, text_color: 0x4DD0E1 }
+        - label:
+            id: chill_name_label
+            align: CENTER
+            x: 0
+            y: -25
+            width: 400
+            text: "--"
+            text_align: CENTER
+            text_font: montserrat_semibold_44
+            text_color: 0xE8EAED
+        - label: { id: chill_counter_label, text: "", align: CENTER, x: 0, y: 60, text_font: montserrat_light_18, text_color: 0x8E8E93 }
+        - label: { id: chill_action_label, text: "Press to play", align: CENTER, x: 0, y: 100, text_font: montserrat_regular_20, text_color: 0x9E9EA4 }
+        - button:
+            id: chill_back_btn
+            align: CENTER
+            x: 0
+            y: 160
+            width: 140
+            height: 50
+            radius: 25
+            clickable: true
+            bg_color: 0x1C1C1E
+            border_width: 1
+            border_color: 0x0E3B40
+            on_press:
+              - lvgl.page.show: { id: playlists_page, animation: OVER_LEFT, time: 240ms }
+            widgets:
+              - label: { text: "Back", align: CENTER, text_font: montserrat_medium_22, text_color: 0x4DD0E1 }
+
+    # ========== THERMOSTAT ==========
+    - id: thermostat_page
+      skip: true
+      scrollable: false
+      bg_color: 0x000000
+      on_swipe_right:
+        - lvgl.page.show: { id: main_menu_page, animation: OVER_RIGHT, time: 240ms }
+      on_load:
+        - lambda: 'id(current_page) = 3;'
+        - lvgl.label.update:
+            id: thermostat_target_label
+            text: !lambda |-
+              static char buf[16];
+              snprintf(buf, sizeof(buf), "%.0f\xc2\xb0", id(thermostat_target));
+              return buf;
+        - lvgl.label.update:
+            id: thermostat_current_label
+            text: !lambda |-
+              static char buf[24];
+              snprintf(buf, sizeof(buf), "Currently %.0f\xc2\xb0""F", id(thermostat_current));
+              return buf;
+      widgets:
+        - button: { id: thermo_glow_1, align: CENTER, width: 470, height: 470, radius: 235, clickable: false, bg_color: 0x060606, border_width: 0, shadow_width: 0 }
+        - button: { id: thermo_glow_2, align: CENTER, width: 460, height: 460, radius: 230, clickable: false, bg_color: 0x0A0A0B, border_width: 0, shadow_width: 0 }
+        - button: { id: thermo_glow_3, align: CENTER, width: 450, height: 450, radius: 225, clickable: false, bg_color: 0x0F0F11, border_width: 0, shadow_width: 0 }
+        - button:
+            id: thermo_ring
+            align: CENTER
+            x: 0
+            y: 0
+            width: 430
+            height: 430
+            radius: 215
+            clickable: false
+            bg_color: 0x1C1C1E
+            bg_grad_color: 0x121214
+            bg_grad_dir: VER
+            border_width: 2
+            border_color: 0x3A3A3C
+            shadow_width: 0
+        - label: { id: thermostat_current_label, text: "--", align: CENTER, x: 0, y: -85, text_font: montserrat_regular_20, text_color: 0x9E9EA4 }
+        - label: { id: thermostat_target_label, text: "--", align: CENTER, x: 0, y: -5, text_font: montserrat_extralight_96, text_color: 0xE8EAED }
+        - label: { id: thermostat_action_label, text: "--", align: CENTER, x: 0, y: 60, text_font: montserrat_medium_22, text_color: 0x8E8E93 }
+        - button:
+            id: thermo_mode_btn
+            align: CENTER
+            x: -70
+            y: 128
+            width: 120
+            height: 50
+            radius: 25
+            clickable: true
+            bg_color: 0x2C2C2E
+            on_press:
+              - script.execute: cycle_thermostat_mode
+            widgets:
+              - label: { id: thermostat_mode_label, text: "--", align: CENTER, text_font: montserrat_medium_22, text_color: 0xE8EAED }
+        - button:
+            id: thermo_back_btn
+            align: CENTER
+            x: 70
+            y: 128
+            width: 120
+            height: 50
+            radius: 25
+            clickable: true
+            bg_color: 0x2C2C2E
+            on_press:
+              - lvgl.page.show: { id: main_menu_page, animation: OVER_LEFT, time: 240ms }
+            widgets:
+              - label: { text: "Done", align: CENTER, text_font: montserrat_medium_22, text_color: 0x8AB4F8 }
+
+    # ========== SLEEP TIMER ==========
+    - id: sleep_page
+      skip: true
+      scrollable: false
+      bg_color: 0x000000
+      on_swipe_right:
+        - lvgl.page.show: { id: tv_menu_page, animation: OVER_RIGHT, time: 240ms }
+      on_load:
+        - lambda: 'id(current_page) = 12;'
+        - script.execute: sleep_update_ui
+      widgets:
+        - button: { align: CENTER, width: 470, height: 470, radius: 235, clickable: false, bg_color: 0x060209, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 420, height: 420, radius: 210, clickable: false, bg_color: 0x0D0514, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 360, height: 360, radius: 180, clickable: false, bg_color: 0x150820, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 300, height: 300, radius: 150, clickable: false, bg_color: 0x1E0C2E, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 240, height: 240, radius: 120, clickable: false, bg_color: 0x28103C, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 170, height: 170, radius: 85, clickable: false, bg_color: 0x32144E, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 100, height: 100, radius: 50, clickable: false, bg_color: 0x3C1860, border_width: 0, shadow_width: 0 }
+        - label: { text: "Sleep Timer", align: CENTER, x: 0, y: -110, text_font: montserrat_regular_20, text_color: 0xBB86FC }
+        - label: { id: sleep_value_label, text: "Off", align: CENTER, x: 0, y: -15, text_font: montserrat_semibold_44, text_color: 0xE8EAED }
+        - label: { text: "TV pauses  ·  lights fade out", align: CENTER, x: 0, y: 45, text_font: montserrat_regular_20, text_color: 0x8E8E93 }
+        - label: { id: sleep_hint, text: "Spin to set", align: CENTER, x: 0, y: 95, text_font: montserrat_regular_20, text_color: 0x9E9EA4 }
+        - button:
+            id: sleep_back_btn
+            align: CENTER
+            x: 0
+            y: 160
+            width: 140
+            height: 50
+            radius: 25
+            clickable: true
+            bg_color: 0x1C1C1E
+            on_press:
+              - lvgl.page.show: { id: tv_menu_page, animation: OVER_LEFT, time: 240ms }
+            widgets:
+              - label: { text: "Back", align: CENTER, text_font: montserrat_medium_22, text_color: 0xBB86FC }
+
+    # ========== PERSON ALERT ==========
+    - id: alert_page
+      skip: true
+      scrollable: false
+      bg_color: 0x000000
+      on_load:
+        - lambda: 'id(current_page) = 13;'
+      widgets:
+        - button: { align: CENTER, width: 470, height: 470, radius: 235, clickable: false, bg_color: 0x0A0202, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 420, height: 420, radius: 210, clickable: false, bg_color: 0x140404, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 360, height: 360, radius: 180, clickable: false, bg_color: 0x200808, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 300, height: 300, radius: 150, clickable: false, bg_color: 0x2E0C0C, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 240, height: 240, radius: 120, clickable: false, bg_color: 0x3C1010, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 170, height: 170, radius: 85, clickable: false, bg_color: 0x4E1414, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 100, height: 100, radius: 50, clickable: false, bg_color: 0x601818, border_width: 0, shadow_width: 0 }
+        - label: { text: "Front Camera", align: CENTER, x: 0, y: -100, text_font: montserrat_regular_20, text_color: 0xF28B82 }
+        - label: { text: "Person", align: CENTER, x: 0, y: -25, text_font: montserrat_semibold_44, text_color: 0xE8EAED }
+        - label: { text: "Detected", align: CENTER, x: 0, y: 25, text_font: montserrat_semibold_44, text_color: 0xE8EAED }
+        - label: { text: "Press or tap to dismiss", align: CENTER, x: 0, y: 95, text_font: montserrat_regular_20, text_color: 0x9E9EA4 }
+        - button:
+            id: alert_dismiss_btn
+            align: CENTER
+            x: 0
+            y: 0
+            width: 480
+            height: 480
+            radius: 240
+            clickable: true
+            bg_opa: TRANSP
+            shadow_width: 0
+            border_width: 0
+            on_press:
+              - script.stop: alert_auto_dismiss
+              - script.execute: wake_from_clock
+
+    # ========== VOICE TIMERS ==========
+    - id: timer_page
+      skip: true
+      scrollable: false
+      bg_color: 0x000000
+      on_load:
+        - lambda: 'id(current_page) = 16;'
+      widgets:
+        - button: { align: CENTER, width: 470, height: 470, radius: 235, clickable: false, bg_color: 0x08050F, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 420, height: 420, radius: 210, clickable: false, bg_color: 0x0F0A1E, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 360, height: 360, radius: 180, clickable: false, bg_color: 0x150E2A, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 300, height: 300, radius: 150, clickable: false, bg_color: 0x1B1236, border_width: 0, shadow_width: 0 }
+        - button: { align: CENTER, width: 240, height: 240, radius: 120, clickable: false, bg_color: 0x211542, border_width: 0, shadow_width: 0 }
+        - label: { text: "Timers", align: CENTER, x: 0, y: -140, text_font: montserrat_regular_20, text_color: 0xBB86FC }
+        - label:
+            id: timer_list_label
+            text: ""
+            align: CENTER
+            x: 0
+            y: -10
+            text_align: CENTER
+            text_font: montserrat_semibold_24
+            text_color: 0xE8EAED
+        - label: { text: "Tap to dismiss", align: CENTER, x: 0, y: 150, text_font: montserrat_regular_20, text_color: 0x9E9EA4 }
+        - button:
+            id: timer_dismiss_btn
+            align: CENTER
+            x: 0
+            y: 0
+            width: 480
+            height: 480
+            radius: 240
+            clickable: true
+            bg_opa: TRANSP
+            shadow_width: 0
+            border_width: 0
+            on_press:
+              - script.execute: wake_from_clock
